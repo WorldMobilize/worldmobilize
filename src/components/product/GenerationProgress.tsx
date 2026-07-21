@@ -98,7 +98,7 @@ export function GenerationProgress({
   if (compact) {
     const current = STEPS.find((s) => !s.done.includes(job.status) && s.active.includes(job.status));
     return (
-      <section className="rounded-2xl border border-zinc-800 bg-zinc-900/60 px-5 py-3">
+      <section className="rounded-2xl border border-white/10 bg-zinc-900/60 px-5 py-3">
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
           <span className="flex items-center gap-2 text-sm text-zinc-100">
             <span aria-hidden className="h-1.5 w-1.5 animate-pulse rounded-full bg-zinc-100" />
@@ -114,7 +114,7 @@ export function GenerationProgress({
         {rendering ? (
           <div className="mt-2 h-1 w-full overflow-hidden rounded-full bg-zinc-800">
             <div
-              className="h-full rounded-full bg-zinc-100 transition-[width] duration-500"
+              className="h-full rounded-full bg-gradient-to-r from-cyan-400 to-blue-500 transition-[width] duration-500"
               style={{ width: `${pct}%` }}
             />
           </div>
@@ -129,7 +129,7 @@ export function GenerationProgress({
   }
 
   return (
-    <section className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-6">
+    <section className="rounded-2xl border border-white/10 bg-zinc-900/60 p-6">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="text-base font-medium text-zinc-100">Sto creando il tuo video</h2>
         <span className="text-xs tabular-nums text-zinc-500">
@@ -168,7 +168,7 @@ export function GenerationProgress({
                   <div className="mt-2">
                     <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
                       <div
-                        className="h-full rounded-full bg-zinc-100 transition-[width] duration-500"
+                        className="h-full rounded-full bg-gradient-to-r from-cyan-400 to-blue-500 transition-[width] duration-500"
                         style={{ width: `${pct}%` }}
                       />
                     </div>

@@ -61,7 +61,7 @@ Camera: whip pans between scenes.`,
 
 export function EmptyState({ onPick }: { onPick: (example: Example) => void }) {
   return (
-    <section className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-8">
+    <section className="rounded-2xl border border-white/10 bg-zinc-900/40 p-8">
       <h2 className="text-lg font-medium text-zinc-100">Descrivi un video, lo giro io</h2>
       <p className="mt-2 max-w-xl text-sm text-zinc-400">
         Scrivi le scene come le racconteresti a un montatore. Ottieni un MP4 completo, con
@@ -78,7 +78,7 @@ export function EmptyState({ onPick }: { onPick: (example: Example) => void }) {
             key={ex.label}
             type="button"
             onClick={() => onPick(ex)}
-            className="rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3 text-left transition-colors hover:border-zinc-600 hover:bg-zinc-800"
+            className="rounded-xl border border-white/10 bg-zinc-900 px-4 py-3 text-left transition-colors hover:border-zinc-600 hover:bg-zinc-800"
           >
             <span className="block text-sm text-zinc-200">{ex.label}</span>
             <span className="mt-0.5 block text-xs text-zinc-500">{ex.hint}</span>
