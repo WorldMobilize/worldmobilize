@@ -209,18 +209,10 @@ export default function Home() {
     void patchProject({ sceneId: scene.id, layerId, animationPreset: preset });
   };
 
-  return (
-    <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-4 bg-zinc-950 px-4 py-6 text-zinc-100">
-      <header>
-        <h1 className="text-xl font-semibold tracking-tight">Kinetta</h1>
-        <p className="mt-1 text-sm text-zinc-400">
-          Dal brief al video finito. Scrivi le scene, guarda l&apos;anteprima nel browser,
-          ritocca e riscarica.
-        </p>
-      </header>
-
-      {/* Prompt / generation */}
-      <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
+  // Shared by both layouts: full width while composing, folded into a
+  // disclosure once the workspace takes over.
+  const composerBlock = (
+    <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
         <textarea
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
@@ -270,24 +262,70 @@ export default function Home() {
           Demo di prova, senza chiamate a pagamento
         </label>
       </section>
+  );
 
-      {error ? <p className="text-sm text-red-400">{error}</p> : null}
+  const errorBlock = error ? (
+    <p className="rounded-lg border border-red-900/60 bg-red-950/30 px-3 py-2 text-sm text-red-300">
+      {error}
+    </p>
+  ) : null;
 
-      {/* Progress outranks everything while the video does not exist yet, and
-          stays as a slim bar once the editor takes over the screen. */}
-      {job && job.status !== "ready" ? (
-        <GenerationProgress job={job} nowMs={nowTick} compact={!!project} />
-      ) : null}
+  return (
+    // Fixed shell: the stage and the rail scroll independently, so the preview
+    // you are editing never scrolls off the screen while you work in the panels.
+    <div className="flex h-screen flex-col overflow-hidden bg-zinc-950 text-zinc-100">
+      <header className="flex h-14 shrink-0 items-center gap-4 border-b border-zinc-800 px-5">
+        <span className="text-sm font-semibold tracking-tight">Kinetta</span>
+        {project ? (
+          <span className="truncate text-xs text-zinc-500">
+            {project.title} · {project.scenes.length} scene · {project.durationSec}s
+          </span>
+        ) : null}
+        {project ? (
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            {scene ? (
+              <button
+                type="button"
+                onClick={() => void onRenderScene(scene.id)}
+                disabled={renderingScene || submitting}
+                className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-800 disabled:opacity-40"
+              >
+                {renderingScene ? "Scena…" : "Render scena"}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => void onRerender()}
+              disabled={submitting}
+              className="rounded-lg bg-white px-3 py-1.5 text-xs font-medium text-zinc-900 disabled:opacity-40"
+            >
+              {submitting ? "Render…" : "Esporta MP4"}
+            </button>
+          </div>
+        ) : null}
+      </header>
 
       {project ? (
-        <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
-          <div className="flex flex-col gap-4">
-            {/* Live browser preview — same renderer used for export */}
+        <div className="flex min-h-0 flex-1">
+          {/* Stage */}
+          <main className="flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto p-5">
+            {job && job.status !== "ready" ? (
+              <GenerationProgress job={job} nowMs={nowTick} compact />
+            ) : null}
+            {errorBlock}
+
+            <details className="group rounded-xl border border-zinc-800 bg-zinc-900/40">
+              <summary className="cursor-pointer list-none px-4 py-2.5 text-xs text-zinc-400 hover:text-zinc-200">
+                Brief — modifica e rigenera
+              </summary>
+              <div className="border-t border-zinc-800 p-4">{composerBlock}</div>
+            </details>
+
             <section className="rounded-2xl border border-zinc-800 bg-zinc-950 p-3">
               <div className="mb-2 flex items-center justify-between">
-                <h2 className="text-sm font-medium text-zinc-200">Anteprima live (browser)</h2>
+                <h2 className="text-sm font-medium text-zinc-200">Anteprima</h2>
                 <span className="text-[11px] text-zinc-500">
-                  {project.scenes.length} scene · {project.durationSec}s · {job?.status}
+                  identica all&apos;export finale
                 </span>
               </div>
               <MotionPlayer
@@ -311,10 +349,11 @@ export default function Home() {
               />
             </section>
 
-            {/* Final export result */}
+            {/* The deliverable. Given its own block rather than a third card
+                in a stack, since it is the thing the whole page exists for. */}
             {job?.status === "ready" && job.outputUrl ? (
               <section className="overflow-hidden rounded-2xl border border-zinc-800 bg-black p-2">
-                <p className="px-1 pb-2 text-[11px] text-zinc-500">Export finale (MP4)</p>
+                <p className="px-1 pb-2 text-[11px] text-zinc-500">Video finale · MP4</p>
                 <video
                   key={job.outputUrl + String(job.updatedAt)}
                   src={job.outputUrl}
@@ -323,34 +362,30 @@ export default function Home() {
                 />
               </section>
             ) : null}
-          </div>
 
-          {/* Editor sidebar */}
-          <div className="flex flex-col gap-4">
-            <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
-              <div className="mb-2 flex items-center justify-between">
-                <h2 className="text-sm font-medium">Scene</h2>
-                <div className="flex gap-2">
-                  {scene ? (
-                    <button
-                      type="button"
-                      onClick={() => void onRenderScene(scene.id)}
-                      disabled={renderingScene || submitting}
-                      className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-800 disabled:opacity-40"
+            {job ? (
+              <details className="rounded-xl border border-zinc-800 bg-zinc-950">
+                <summary className="cursor-pointer list-none px-4 py-2.5 text-xs text-zinc-500 hover:text-zinc-300">
+                  Dettagli tecnici · {STATUS_LABEL[job.status] ?? job.status}
+                </summary>
+                <ul className="max-h-56 space-y-0.5 overflow-auto border-t border-zinc-800 px-4 py-3 font-mono text-[11px] text-zinc-500">
+                  {job.logs.map((line, i) => (
+                    <li
+                      key={`${i}-${line.slice(0, 40)}`}
+                      className={i === job.logs.length - 1 ? "text-zinc-300" : undefined}
                     >
-                      {renderingScene ? "Scena…" : "Render scena"}
-                    </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    onClick={() => void onRerender()}
-                    disabled={submitting}
-                    className="rounded-lg bg-white px-3 py-1.5 text-xs font-medium text-zinc-900 disabled:opacity-40"
-                  >
-                    {submitting ? "Render…" : "Esporta MP4"}
-                  </button>
-                </div>
-              </div>
+                      {line}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
+          </main>
+
+          {/* Rail. 380px so the two-column scene form inside it can breathe. */}
+          <aside className="flex w-[380px] shrink-0 flex-col gap-4 overflow-y-auto border-l border-zinc-800 p-4">
+            <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
+              <h2 className="mb-2 text-sm font-medium">Scene</h2>
               {scenePreviewUrl ? (
                 <video
                   key={scenePreviewUrl}
@@ -510,56 +545,44 @@ export default function Home() {
                 />
               ) : null}
             </section>
+          </aside>
+        </div>
+      ) : (
+        // Composing: a single reading-width column, centred. The workspace wants
+        // the whole viewport; a blank page emphatically does not.
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-5 py-10">
+            {job ? null : (
+              <EmptyState
+                onPick={(ex) => {
+                  setPrompt(ex.prompt);
+                  setAspectRatio(ex.hint.includes("9:16") ? "9:16" : "16:9");
+                }}
+              />
+            )}
+            {composerBlock}
+            {errorBlock}
+            {job ? <GenerationProgress job={job} nowMs={nowTick} /> : null}
+            {job ? (
+              <details className="rounded-xl border border-zinc-800 bg-zinc-950">
+                <summary className="cursor-pointer list-none px-4 py-2.5 text-xs text-zinc-500 hover:text-zinc-300">
+                  Dettagli tecnici · {STATUS_LABEL[job.status] ?? job.status}
+                </summary>
+                <ul className="max-h-56 space-y-0.5 overflow-auto border-t border-zinc-800 px-4 py-3 font-mono text-[11px] text-zinc-500">
+                  {job.logs.map((line, i) => (
+                    <li
+                      key={`${i}-${line.slice(0, 40)}`}
+                      className={i === job.logs.length - 1 ? "text-zinc-300" : undefined}
+                    >
+                      {line}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
           </div>
         </div>
-      ) : job ? null : (
-        <EmptyState
-          onPick={(ex) => {
-            setPrompt(ex.prompt);
-            setAspectRatio(ex.hint.includes("9:16") ? "9:16" : "16:9");
-          }}
-        />
       )}
-
-      {job ? (
-        <section className="rounded-2xl border border-zinc-800 bg-zinc-950 p-3">
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-sm font-medium text-zinc-200">
-              Dettagli tecnici · {STATUS_LABEL[job.status] ?? job.status}
-            </h2>
-            <span className="text-[11px] text-zinc-500">
-              {job.status !== "ready" && job.status !== "failed"
-                ? (() => {
-                    const ageSec = Math.max(0, Math.round((nowTick - job.updatedAt) / 1000));
-                    if (ageSec > 60) {
-                      return (
-                        <span className="text-amber-400">
-                          nessun aggiornamento da {ageSec}s — possibile blocco
-                        </span>
-                      );
-                    }
-                    return <span>ultimo update {ageSec}s fa</span>;
-                  })()
-                : null}
-            </span>
-          </div>
-          {job.error ? (
-            <p className="mb-2 rounded-lg border border-red-900/60 bg-red-950/40 px-2 py-1 text-xs text-red-300">
-              {job.error}
-            </p>
-          ) : null}
-          <ul className="max-h-48 space-y-0.5 overflow-auto font-mono text-[11px] text-zinc-400">
-            {job.logs.map((line, i) => (
-              <li
-                key={`${i}-${line.slice(0, 40)}`}
-                className={i === job.logs.length - 1 ? "text-zinc-200" : undefined}
-              >
-                {line}
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-    </main>
+    </div>
   );
 }
