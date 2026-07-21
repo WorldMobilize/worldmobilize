@@ -1,20 +1,23 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Inter } from "next/font/google";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+/**
+ * Self-hosted after build, so frame capture never depends on the network.
+ * `display: "block"` avoids a fallback-font flash: each exported frame is a
+ * fresh page load, and a swap mid-load would render some frames in the wrong
+ * face. The exporter also awaits `document.fonts.ready` before screenshotting.
+ */
+const inter = Inter({
   subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
+  variable: "--font-sans",
+  display: "block",
 });
 
 export const metadata: Metadata = {
-  title: "BrandArena",
-  description: "A local prototype of BrandArena — a persistent internet territory war map.",
+  title: "Kinetta",
+  description: "AI-assisted motion graphics editor",
+  icons: { icon: [] },
 };
 
 export default function RootLayout({
@@ -23,13 +26,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-    >
-      <body className="flex min-h-full max-w-[100vw] flex-col overflow-x-hidden bg-black text-zinc-50">
-        {children}
-      </body>
+    <html lang="en" className={`h-full antialiased ${inter.variable}`}>
+      <body className="min-h-full bg-white text-zinc-900">{children}</body>
     </html>
   );
 }

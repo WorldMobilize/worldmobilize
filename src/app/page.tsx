@@ -1,797 +1,548 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
-import { CreateFactionModal } from "@/components/territory/CreateFactionModal";
-import { TerritoryActivityFeed } from "@/components/territory/TerritoryActivityFeed";
-import { TerritoryMap } from "@/components/territory/TerritoryMap";
-import { NationLeaderboard } from "@/components/nation/NationLeaderboard";
-import { NationSidebar } from "@/components/nation/NationSidebar";
-import { WarPanel } from "@/components/nation/WarPanel";
-import { WarTicker } from "@/components/nation/WarTicker";
-import { FactionRolesPanel } from "@/components/nation/FactionRolesPanel";
-import type { TerritoryEvent } from "@/lib/territoryTypes";
-import type { SelectedCountry } from "@/lib/territoryZones";
-import { toSelectedCountry } from "@/lib/territoryZones";
-import type { Faction } from "@/lib/factionTypes";
-import type { FactionMember } from "@/lib/factionRoles";
-import { seedFactionRoster } from "@/lib/factionRoles";
-import type { Nation, NationWar, WarProposal } from "@/lib/nationMvpTypes";
-import { COUNTRY_BY_ID, countryName } from "@/lib/worldMapData";
-import {
-  ATTACKER_ACTIONS,
-  DEFENDER_ACTIONS,
-  WAR_ACTIONS,
-  applyWarActionToWar,
-  computeWarProgressTick,
-  createWarWithParticipation,
-  getPlayerWarSide,
-  type WarActionId,
-} from "@/lib/warParticipation";
-import { buildNationAlertMap, effectiveCooldownMs, getWarActionModifiers, tickWarEscalation } from "@/lib/warEscalation";
-import {
-  cinematicApproved,
-  cinematicCapture,
-  cinematicDefend,
-  cinematicDemoAction,
-  cinematicFounderClaim,
-  cinematicProposal,
-  cinematicRejected,
-  cinematicSupportCap,
-  cinematicWarDeclared,
-} from "@/lib/warEventFeed";
-import { applyPlayerWarAction, normalizeWarState, runWarEscalationTick } from "@/lib/warRuntime";
-import type { NationAlertVisual } from "@/lib/warEscalation";
-import {
-  classifyMoment,
-  createInitialMomentGateState,
-  createMoment,
-  markBannerMomentShown,
-  shouldEnqueueBannerMoment,
-  type LiveMoment,
-  type MomentGateState,
-} from "@/lib/liveMoments";
-import { GlobalMomentBanner } from "@/components/moments/GlobalMomentBanner";
-import { createInitialNations } from "@/lib/nationMvpData";
+import { MotionPlayer, type MotionPlayerHandle } from "@/components/motion/MotionPlayer";
+import { LayerInspector } from "@/components/editor/LayerInspector";
+import { ProjectTimeline } from "@/components/editor/ProjectTimeline";
+import type { AspectRatio, JobStatus, MotionJob, MotionLayer, MotionScene } from "@/lib/motion/types";
 
-function pick<T>(arr: T[], i: number) {
-  return arr[Math.max(0, Math.min(arr.length - 1, i))]!;
+const STATUS_LABEL: Record<JobStatus, string> = {
+  queued: "In coda…",
+  directing: "Director IA…",
+  preparing_assets: "Preparazione…",
+  rendering_scenes: "Render scene…",
+  composing: "Composizione…",
+  ready: "Pronto",
+  failed: "Errore",
+};
+
+const EXAMPLE_PROMPT = `Scene 1 (0–3s): A glowing capsule/pill icon materializes from particles in the center. Bold text slams in: "1,400+ marketing secrets. One pill."
+
+Scene 2 (3–7s): Five category cards fly in and stack, each with a counter ticking up: Copywriting 764 · Marketing 453 · Psychology 106 · Design 66 · Case Studies 29.
+
+Scene 3 (7–11s): A stream of book/course covers rushes past with motion blur — overlay: "100+ courses & books, distilled."
+
+Scene 4 (11–14s): Brand chips pop in a grid: Gymshark, Liquid Death, Glossier, SKIMS — overlay: "Real DTC brand breakdowns."
+
+Scene 5 (14–18s): A chat mockup: a user asks, an answer streams in with cited sources. Overlay: "Ask anything. Get the exact framework."
+
+Final: capsule logo + "dtcpill" wordmark, tagline "Your unfair advantage in DTC." Subtle glow pulse.
+
+Camera: dynamic push-ins and whip pans, premium tech-brand feel.`;
+
+function layerLabel(layer: MotionLayer): string {
+  if (layer.type === "text") return `“${layer.text.slice(0, 24)}”`;
+  if (layer.type === "image") return layer.assetId.replace("builtin:", "");
+  if (layer.type === "component") return layer.component;
+  return layer.shape;
 }
 
 export default function Home() {
-  const [events, setEvents] = useState<TerritoryEvent[]>([
-    { id: "boot", ts: 0, text: "Select a country to inspect territory and command options." },
-    { id: "boot-2", ts: 0, text: "Claim a nation and start the first global conflict." },
-  ]);
-  const [selectedCountry, setSelectedCountry] = useState<SelectedCountry | null>(null);
-  const [foundOpen, setFoundOpen] = useState(false);
+  const [prompt, setPrompt] = useState(EXAMPLE_PROMPT);
+  const [aspectRatio, setAspectRatio] = useState<AspectRatio>("16:9");
+  const [localDemo, setLocalDemo] = useState(false);
+  const [voiceoverEnabled, setVoiceoverEnabled] = useState(false);
+  const [job, setJob] = useState<MotionJob | null>(null);
+  const [selectedSceneId, setSelectedSceneId] = useState<string | null>(null);
+  const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [currentMs, setCurrentMs] = useState(0);
+  const [nowTick, setNowTick] = useState(() => Date.now());
 
-  const [nations, setNations] = useState<Nation[]>(() => createInitialNations());
-  const [factions, setFactions] = useState<Faction[]>([]);
-  const [wars, setWars] = useState<NationWar[]>([]);
-  const [warProposals, setWarProposals] = useState<WarProposal[]>([]);
-  const [members, setMembers] = useState<FactionMember[]>([]);
-  const [playerMemberId, setPlayerMemberId] = useState<string | null>(null);
-  const [selectedFactionId, setSelectedFactionId] = useState<string | null>(null);
-  const [selectedWarId, setSelectedWarId] = useState<string | null>(null);
-  const [actionCooldowns, setActionCooldowns] = useState<Record<string, number>>({});
-  const [lastActionFeedback, setLastActionFeedback] = useState<string | null>(null);
-  const [actAsFactionId, setActAsFactionId] = useState<string | null>(null);
-  const [screenPulseUntil, setScreenPulseUntil] = useState(0);
-  const [escalationClock, setEscalationClock] = useState(0);
-  const [moments, setMoments] = useState<LiveMoment[]>([]);
-  const [momentGate, setMomentGate] = useState<MomentGateState>(() => createInitialMomentGateState());
+  const pollRef = useRef<number | null>(null);
+  const playerRef = useRef<MotionPlayerHandle | null>(null);
 
-  const handleMomentExpire = useCallback((id: string) => {
-    setMoments((prev) => prev.filter((m) => m.id !== id));
-  }, []);
-
-  const handleMomentShow = useCallback((m: LiveMoment) => {
-    setMomentGate((g) => markBannerMomentShown({ gate: g, text: m.text, now: Date.now() }));
-  }, []);
-
-  // Product mode: simulation is always running locally (no visible dev controls).
-  const simRunning = true;
-  const simSpeed: 1 | 5 | 20 | 50 = 5;
-  const demoMode: "none" | "nation" | "world" = "none";
-
-  const uiEventSeqRef = useRef(0);
-  const nextUiEventId = () => {
-    uiEventSeqRef.current += 1;
-    return `e-${uiEventSeqRef.current}`;
-  };
-
-  const pushEvent = (text: string) => {
-    const now = Date.now();
-    setEvents((prev) => [{ id: nextUiEventId(), ts: now, text }, ...prev].slice(0, 80));
-
-    const m = classifyMoment(text);
-    if (!m.bannerText) return;
-
-    const bannerText = m.bannerText;
-    setMomentGate((gate) => {
-      const g = shouldEnqueueBannerMoment({
-        gate,
-        text: bannerText,
-        priority: m.priority,
-        now,
-      });
-      if (g.allow) {
-        const next = createMoment(g.normalized, m.priority);
-        setMoments((prev) => {
-          // If multiple moments happen close together, keep only highest-priority recent ones.
-          const merged = [next, ...prev]
-            .sort((a, b) => {
-              const pr = rank(b.priority) - rank(a.priority);
-              if (pr !== 0) return pr;
-              return b.ts - a.ts;
-            })
-            .slice(0, 6);
-          return merged;
-        });
-      }
-      return g.nextGate;
-    });
-  };
-
-  const selectedNation = useMemo(() => {
-    if (!selectedCountry?.id) return null;
-    return nations.find((n) => n.id === selectedCountry.id) ?? null;
-  }, [nations, selectedCountry]);
-
-  const selectedOwner = useMemo(() => {
-    if (!selectedNation?.ownerFactionId) return null;
-    return factions.find((f) => f.id === selectedNation.ownerFactionId) ?? null;
-  }, [factions, selectedNation]);
-
-  const nationById = useMemo(() => new Map(nations.map((n) => [n.id, n])), [nations]);
-  const nationNameById = useMemo(() => new Map(nations.map((n) => [n.id, n.name])), [nations]);
+  const project = job?.project ?? null;
 
   useEffect(() => {
-    const t = setInterval(() => setEscalationClock(Date.now()), 400);
-    return () => clearInterval(t);
+    if (!job || job.status === "ready" || job.status === "failed") return;
+    const t = window.setInterval(() => setNowTick(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, [job?.id, job?.status]);
+
+  const stopPolling = useCallback(() => {
+    if (pollRef.current != null) {
+      window.clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
   }, []);
 
-  const nationAlerts = useMemo((): Map<string, NationAlertVisual> => {
-    void escalationClock;
-    return buildNationAlertMap(wars, nationNameById, Date.now());
-  }, [wars, nationNameById, escalationClock]);
+  useEffect(() => () => stopPolling(), [stopPolling]);
 
-  const screenPulse = screenPulseUntil > Date.now();
-
-  const worldIntensity = useMemo(() => {
-    // 0..1 based on how many wars and how hot they are
-    const now = Date.now();
-    const hot = wars.filter((w) => {
-      const phase = w.escalation?.phase;
-      const defAlert = w.escalation?.defenderAlert;
-      return phase === "critical" || phase === "last_stand" || defAlert === "last_stand" || defAlert === "capital_threatened";
-    }).length;
-    const base = Math.min(1, wars.length / 4);
-    const heat = Math.min(1, hot / 2);
-    const pulse = screenPulse ? 0.18 : 0;
-    void now;
-    return Math.max(base * 0.55 + heat * 0.55 + pulse, 0);
-  }, [wars, screenPulse]);
-
-  const focusedWar = useMemo(() => {
-    if (selectedWarId) return wars.find((w) => w.id === selectedWarId) ?? null;
-    if (!selectedNation) return wars[0] ?? null;
-    return (
-      wars.find((w) => w.targetNationId === selectedNation.id || w.attackerNationId === selectedNation.id) ?? wars[0] ?? null
-    );
-  }, [wars, selectedNation, selectedWarId]);
-
-  const focusedWarNations = useMemo(() => {
-    if (!focusedWar) return { attacker: null, defender: null };
-    return {
-      attacker: nationById.get(focusedWar.attackerNationId) ?? null,
-      defender: nationById.get(focusedWar.targetNationId) ?? null,
-    };
-  }, [focusedWar, nationById]);
-
-  const focusedWarFactions = useMemo(() => {
-    if (!focusedWar) return { attacker: null, defender: null };
-    return {
-      attacker: factions.find((f) => f.id === focusedWar.attackerFactionId) ?? null,
-      defender: focusedWar.defenderFactionId ? factions.find((f) => f.id === focusedWar.defenderFactionId) ?? null : null,
-    };
-  }, [focusedWar, factions]);
-
-  const playerMember = useMemo(
-    () => members.find((m) => m.id === playerMemberId) ?? null,
-    [members, playerMemberId],
+  const startPolling = useCallback(
+    (id: string) => {
+      stopPolling();
+      pollRef.current = window.setInterval(async () => {
+        try {
+          const res = await fetch(`/api/jobs/${id}`);
+          if (!res.ok) return;
+          const next = (await res.json()) as MotionJob;
+          setJob(next);
+          const firstScene = next.project?.scenes[0]?.id ?? null;
+          setSelectedSceneId((prev) =>
+            prev && next.project?.scenes.some((s) => s.id === prev) ? prev : firstScene,
+          );
+          if (next.status === "ready" || next.status === "failed") {
+            stopPolling();
+            setSubmitting(false);
+          }
+        } catch {
+          /* keep polling */
+        }
+      }, 800);
+    },
+    [stopPolling],
   );
 
-  const playerFactionId = playerMember?.factionId ?? selectedFactionId;
-  const effectiveFactionId = actAsFactionId || playerFactionId;
-
-  const playerWarSide = useMemo(() => {
-    if (!focusedWar) return null;
-    return getPlayerWarSide(focusedWar, effectiveFactionId);
-  }, [focusedWar, effectiveFactionId]);
-
-  const pendingProposalsForPlayer = useMemo(() => {
-    if (!playerFactionId) return [];
-    return warProposals.filter((p) => p.factionId === playerFactionId && p.status === "pending");
-  }, [warProposals, playerFactionId]);
-
-  const selectedWar = useMemo(() => {
-    if (!selectedNation) return null;
-    return wars.find((w) => w.targetNationId === selectedNation.id || w.attackerNationId === selectedNation.id) ?? null;
-  }, [wars, selectedNation]);
-
-  const neighbors = useMemo(() => {
-    if (!selectedNation) return [];
-    return selectedNation.neighbors
-      .map((id) => nationById.get(id))
-      .filter((n): n is Nation => !!n)
-      .map((n) => ({ nation: n, owner: n.ownerFactionId ? factions.find((f) => f.id === n.ownerFactionId) ?? null : null }));
-  }, [selectedNation, nationById, factions]);
-
-  const canFoundFaction = !!selectedNation && !selectedNation.ownerFactionId;
-  const canProposeWar =
-    !!selectedNation &&
-    !!selectedNation.ownerFactionId &&
-    selectedNation.currentSupport >= selectedNation.audienceCap &&
-    playerMember?.role === "founder" &&
-    selectedNation.ownerFactionId === playerMember.factionId;
-
-  const foundFaction = (args: { territoryId: string; name: string; color: string; logoUrl?: string; logoInitials?: string }) => {
-    const capNation = nations.find((n) => n.id === args.territoryId) ?? null;
-    if (!capNation || capNation.ownerFactionId) return;
-
-    const id = `f-${Math.random().toString(16).slice(2, 10)}`;
-    const f: Faction = {
-      id,
-      name: args.name,
-      color: args.color,
-      logoUrl: args.logoUrl,
-      logoInitials: args.logoInitials,
-      aggression: 0.58,
-      capitalTerritoryId: capNation.id,
-      supportersTotal: 0,
-      supportersActive: 0,
-      engagementRate: 0.14,
-      morale: 72,
-      influence: 0,
-      engagement: 55,
-    };
-
-    const roster = seedFactionRoster(id, args.name);
-    setFactions((prev) => [...prev, f]);
-    setMembers((prev) => [...prev, ...roster]);
-    setPlayerMemberId(roster[0]!.id);
-    setSelectedFactionId(id);
-    setNations((prev) =>
-      prev.map((n) =>
-        n.id === capNation.id
-          ? {
-              ...n,
-              ownerFactionId: id,
-              status: "owned",
-              currentSupport: Math.max(n.currentSupport, Math.min(n.audienceCap, 50)),
-            }
-          : n,
-      ),
-    );
-    pushEvent(cinematicFounderClaim(capNation.name, args.name));
-  };
-
-  const addSupport = (amount: number) => {
-    if (!selectedNation?.ownerFactionId) return;
-    const fid = selectedNation.ownerFactionId;
-
-    setNations((prev) =>
-      prev.map((n) => {
-        if (n.id !== selectedNation.id) return n;
-        const next = Math.min(n.audienceCap, n.currentSupport + amount);
-        return { ...n, currentSupport: next };
-      }),
-    );
-
-    setFactions((prev) =>
-      prev.map((f) => {
-        if (f.id !== fid) return f;
-        const total = f.supportersTotal + amount;
-        const active = Math.min(total, Math.max(f.supportersActive, total * f.engagementRate));
-        return { ...f, supportersTotal: total, supportersActive: active };
-      }),
-    );
-
-    const after = Math.min(selectedNation.audienceCap, selectedNation.currentSupport + amount);
-    if (after >= selectedNation.audienceCap) pushEvent(cinematicSupportCap(selectedNation.name));
-  };
-
-  const executeWar = (attackerNationId: string, targetNationId: string, attackerFactionId: string) => {
-    if (wars.some((w) => w.targetNationId === targetNationId)) return;
-    const attackerNation = nationById.get(attackerNationId);
-    const target = nationById.get(targetNationId);
-    if (!attackerNation || !target) return;
-    if (!attackerNation.neighbors.includes(targetNationId)) return;
-
-    const defenderFactionId = target.ownerFactionId;
-    const id = `w-${Math.random().toString(16).slice(2, 10)}`;
-    const startedAt = Date.now();
-    const endsAt = startedAt + (defenderFactionId ? 24_000 : 10_000);
-    const attackerF = factions.find((f) => f.id === attackerFactionId);
-    const defenderF = defenderFactionId ? factions.find((f) => f.id === defenderFactionId) ?? null : null;
-
-    const w = createWarWithParticipation({
-      id,
-      attackerFactionId,
-      defenderFactionId,
-      attackerNationId,
-      targetNationId,
-      startedAt,
-      endsAt,
-      attackerActive: attackerF?.supportersActive ?? 0,
-      defenderActive: defenderF?.supportersActive ?? 800,
-    });
-
-    setWars((prev) => [...prev, w]);
-    setSelectedWarId(id);
-    setNations((prev) => prev.map((n) => (n.id === targetNationId ? { ...n, status: "contested" } : n)));
-
-    const attackerName = factions.find((f) => f.id === attackerFactionId)?.name ?? "Unknown faction";
-    const defenderName = defenderFactionId
-      ? factions.find((f) => f.id === defenderFactionId)?.name ?? target.name
-      : target.name;
-    pushEvent(cinematicWarDeclared(attackerNation.name, target.name));
-  };
-
-  const proposeWar = (targetNationId: string) => {
-    if (!selectedNation?.ownerFactionId || !playerMemberId) return;
-    if (playerMember?.role !== "founder") return;
-    if (selectedNation.currentSupport < selectedNation.audienceCap) return;
-    if (!selectedNation.neighbors.includes(targetNationId)) return;
-    if (warProposals.some((p) => p.status === "pending" && p.targetNationId === targetNationId)) return;
-
-    const target = nationById.get(targetNationId);
-    if (!target) return;
-
-    const proposal: WarProposal = {
-      id: `p-${Math.random().toString(16).slice(2, 10)}`,
-      factionId: selectedNation.ownerFactionId,
-      attackerNationId: selectedNation.id,
-      targetNationId,
-      proposedByMemberId: playerMemberId,
-      status: "pending",
-      votes: [],
-      createdAt: Date.now(),
-    };
-    setWarProposals((prev) => [...prev, proposal]);
-    pushEvent(cinematicProposal(target.name));
-  };
-
-  const applyProposalResolutions = (list: WarProposal[]): WarProposal[] => {
-    const approved: WarProposal[] = [];
-    const next = list.map((p) => {
-      if (p.status !== "pending") return p;
-      const yes = p.votes.filter((v) => v.vote === "yes").length;
-      const no = p.votes.filter((v) => v.vote === "no").length;
-      if (yes > no) {
-        approved.push(p);
-        return { ...p, status: "approved" as const };
-      }
-      if (no > yes && no > 0) {
-        const target = nationById.get(p.targetNationId);
-        pushEvent(cinematicRejected(target?.name ?? "target"));
-        return { ...p, status: "rejected" as const };
-      }
-      return p;
-    });
-    for (const p of approved) {
-      const target = nationById.get(p.targetNationId);
-      executeWar(p.attackerNationId, p.targetNationId, p.factionId);
-      pushEvent(cinematicApproved(target?.name ?? "target"));
+  const generateVideo = async () => {
+    const brief = prompt.trim();
+    if (!brief && !localDemo) {
+      setError("Scrivi un prompt o attiva la demo locale");
+      return;
     }
-    return next;
-  };
-
-  const voteOnProposal = (proposalId: string, vote: "yes" | "no") => {
-    if (!playerMember || playerMember.role !== "general") return;
-    setWarProposals((prev) => {
-      const voted = prev.map((p) => {
-        if (p.id !== proposalId || p.status !== "pending") return p;
-        if (p.votes.some((v) => v.memberId === playerMember.id)) return p;
-        return { ...p, votes: [...p.votes, { memberId: playerMember.id, vote }] };
+    setSubmitting(true);
+    setError(null);
+    setJob(null);
+    setSelectedSceneId(null);
+    setSelectedLayerId(null);
+    stopPolling();
+    try {
+      const res = await fetch("/api/jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: brief, aspectRatio, localDemo, voiceoverEnabled }),
       });
-      return applyProposalResolutions(voted);
-    });
-  };
-
-  const autoVoteDemoProposals = () => {
-    if (demoMode === "none") return;
-    setWarProposals((prev) => {
-      const withVotes = prev.map((p) => {
-        if (p.status !== "pending") return p;
-        const gens = members.filter((m) => m.factionId === p.factionId && m.role === "general");
-        const votes = [...p.votes];
-        for (const g of gens) {
-          if (!votes.some((v) => v.memberId === g.id)) votes.push({ memberId: g.id, vote: "yes" });
-        }
-        return { ...p, votes };
-      });
-      return applyProposalResolutions(withVotes);
-    });
-  };
-
-  const promoteToGeneral = (memberId: string) => {
-    if (playerMember?.role !== "founder") return;
-    setMembers((prev) =>
-      prev.map((m) => (m.id === memberId && m.factionId === playerMember.factionId ? { ...m, role: "general" } : m)),
-    );
-  };
-
-  const demoteGeneral = (memberId: string) => {
-    if (playerMember?.role !== "founder") return;
-    setMembers((prev) =>
-      prev.map((m) => (m.id === memberId && m.role === "general" ? { ...m, role: "soldier" } : m)),
-    );
-  };
-
-  const performWarAction = (warId: string, actionId: WarActionId, skipCooldown = false) => {
-    const war = wars.find((w) => w.id === warId);
-    if (!war) return;
-    const side = getPlayerWarSide(war, effectiveFactionId);
-    const action = WAR_ACTIONS[actionId];
-    if (!side || action.side !== side) return;
-
-    const cdKey = `${warId}:${actionId}`;
-    const now = Date.now();
-    const nw = normalizeWarState(war);
-    if (!skipCooldown && (actionCooldowns[cdKey] ?? 0) > now) return;
-
-    const atkNation = nationById.get(war.attackerNationId);
-    const defNation = nationById.get(war.targetNationId);
-    const atkF = factions.find((f) => f.id === war.attackerFactionId);
-
-    const result = applyPlayerWarAction({
-      war: nw,
-      actionId,
-      side,
-      actorLabel: playerMember?.displayName ?? atkF?.name ?? "Soldier",
-      attackerNationName: atkNation?.name ?? "Attackers",
-      defenderNationName: defNation?.name ?? "target",
-      attackerFactionName: side === "attack" ? atkF?.name : undefined,
-      now,
-    });
-
-    const esc = tickWarEscalation(result.war, now, {
-      attacker: atkNation?.name ?? "Attackers",
-      defender: defNation?.name ?? "target",
-    });
-
-    setWars((prev) => prev.map((w) => (w.id === warId ? esc.war : w)));
-    if (!skipCooldown) {
-      const cdMs = effectiveCooldownMs(action, nw, side, now);
-      setActionCooldowns((prev) => ({ ...prev, [cdKey]: now + cdMs }));
-    }
-
-    pushEvent(result.feedLine);
-    for (const line of esc.feedEvents) pushEvent(line);
-    if (result.screenPulse || esc.screenPulse) setScreenPulseUntil(now + 650);
-    setLastActionFeedback(result.feedback);
-    window.setTimeout(() => setLastActionFeedback(null), 3500);
-  };
-
-  const applyDemoWarActions = (input: NationWar[]): NationWar[] => {
-    if (demoMode === "none") return input;
-    const ts = Date.now();
-    return input.map((w) => {
-      if (Math.random() > 0.22) return w;
-      const canDefend = !!w.defenderFactionId;
-      const side = canDefend && Math.random() > 0.48 ? "defense" : "attack";
-      const pool = side === "attack" ? ATTACKER_ACTIONS : DEFENDER_ACTIONS;
-      const aid = pool[Math.floor(Math.random() * pool.length)]!;
-      const atkN = nationById.get(w.attackerNationId);
-      const defN = nationById.get(w.targetNationId);
-      const actor = side === "attack" ? atkN?.name ?? "Attackers" : defN?.name ?? "Defenders";
-      const action = WAR_ACTIONS[aid];
-      const mods = getWarActionModifiers(normalizeWarState(w), side, ts);
-      const { war: nextWar } = applyWarActionToWar(normalizeWarState(w), action, actor, defN?.name ?? "target", ts, mods);
-      const line = cinematicDemoAction(side, side === "attack" ? atkN?.name ?? "Attackers" : defN?.name ?? "Defenders");
-      if (line) pushEvent(line);
-      return nextWar;
-    });
-  };
-
-  // Dev-only geography validation: ensure each playable nation id maps to the intended country name.
-  useEffect(() => {
-    if (process.env.NODE_ENV !== "development") return;
-    const mismatches: string[] = [];
-    for (const n of nations) {
-      const f = COUNTRY_BY_ID.get(n.id);
-      if (!f) {
-        mismatches.push(`${n.name}: missing feature for id ${n.id}`);
-        continue;
+      if (!res.ok) {
+        const data = (await res.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(data?.error ?? "Generazione fallita");
       }
-      const actual = countryName(f);
-      if (actual !== n.name) mismatches.push(`${n.name}: id ${n.id} resolves to ${actual}`);
+      const { id } = (await res.json()) as { id: string };
+      startPolling(id);
+    } catch (err) {
+      setSubmitting(false);
+      setError(err instanceof Error ? err.message : "Errore");
     }
-    if (mismatches.length > 0) {
-      // eslint-disable-next-line no-console
-      console.warn("[geo-validate] playable nation mismatches", mismatches);
-      pushEvent("Geography warning: some playable nations mismatch map data (see console)");
+  };
+
+  const patchProject = async (body: Record<string, unknown>) => {
+    if (!job) return;
+    const res = await fetch(`/api/jobs/${job.id}/project`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const data = (await res.json().catch(() => null)) as { error?: string } | null;
+      setError(data?.error ?? "Modifica fallita");
+      return;
     }
-  }, [nations]);
+    const data = (await res.json()) as { project: MotionJob["project"] };
+    setJob((prev) => (prev ? { ...prev, project: data.project } : prev));
+  };
 
-  const simTickOnce = () => {
-    autoVoteDemoProposals();
+  const onRerender = async () => {
+    if (!job) return;
+    setSubmitting(true);
+    setError(null);
+    await fetch(`/api/jobs/${job.id}/render`, { method: "POST" });
+    startPolling(job.id);
+  };
 
-    // 1) advance wars
-    const factionById = new Map(factions.map((f) => [f.id, f]));
-    const now = Date.now();
-
-    const warsAfterActions = applyDemoWarActions(wars);
-
-    const captures: NationWar[] = [];
-    const nextWars: NationWar[] = warsAfterActions
-      .map((w) => {
-        const nw = normalizeWarState(w);
-        const attacker = factionById.get(nw.attackerFactionId) ?? null;
-        const defender = nw.defenderFactionId ? factionById.get(nw.defenderFactionId) ?? null : null;
-        const atk = attacker ? Math.max(0, attacker.supportersActive) : 0;
-        const def = defender ? Math.max(0, defender.supportersActive) : 0;
-        const ticked = computeWarProgressTick(nw, atk, def, 0.25);
-        const done = ticked.progress >= 100 || now >= ticked.endsAt;
-        if (done) captures.push({ ...ticked, progress: Math.min(100, ticked.progress) });
-        return done ? null : ticked;
-      })
-      .filter((x): x is NationWar => !!x);
-
-    const escalated = runWarEscalationTick(nextWars, nationNameById, now);
-    for (const line of escalated.feedEvents) pushEvent(line);
-    if (escalated.screenPulse) setScreenPulseUntil(now + 650);
-    const warsEscalated = escalated.wars;
-
-    if (captures.length > 0) {
-      const capIds = new Set(captures.map((c) => c.targetNationId));
-      setNations((prev) =>
-        prev.map((n) => {
-          const cap = captures.find((c) => c.targetNationId === n.id);
-          if (!cap) return n;
-          return {
-            ...n,
-            ownerFactionId: cap.attackerFactionId,
-            status: "owned",
-            currentSupport: Math.min(n.audienceCap, Math.max(n.currentSupport, Math.round(n.audienceCap * 0.25))),
-          };
-        }),
-      );
-      for (const w of captures) {
-        const targetName = nationById.get(w.targetNationId)?.name ?? "Unknown";
-        const attackerName = factions.find((f) => f.id === w.attackerFactionId)?.name ?? "Unknown faction";
-        pushEvent(cinematicCapture(attackerName, targetName));
+  const [scenePreviewUrl, setScenePreviewUrl] = useState<string | null>(null);
+  const [renderingScene, setRenderingScene] = useState(false);
+  const onRenderScene = async (sceneId: string) => {
+    if (!job) return;
+    setRenderingScene(true);
+    setError(null);
+    setScenePreviewUrl(null);
+    try {
+      const res = await fetch(`/api/jobs/${job.id}/render-scene/${sceneId}`, { method: "POST" });
+      const data = (await res.json().catch(() => null)) as
+        | { outputUrl?: string; error?: string }
+        | null;
+      if (!res.ok || !data?.outputUrl) {
+        throw new Error(data?.error ?? "Render scena fallito");
       }
-      // clear contested on nations no longer at war
-      setNations((prev) =>
-        prev.map((n) => (capIds.has(n.id) ? { ...n, status: "owned" } : n.status === "contested" ? n : n)),
-      );
-    }
-
-    setWars(warsEscalated);
-
-    // 2) drip support into owned nations (demo feel)
-    setNations((prev) =>
-      prev.map((n) => {
-        if (!n.ownerFactionId) return n;
-        const inc = Math.max(15, Math.round(n.audienceCap * 0.02));
-        const next = Math.min(n.audienceCap, n.currentSupport + inc);
-        return { ...n, currentSupport: next };
-      }),
-    );
-
-    // 3) auto declare wars for capped owned nations (demo modes)
-    if (demoMode === "none") return;
-    const byIdNow = new Map(nations.map((n) => [n.id, n]));
-    for (const n of nations) {
-      if (!n.ownerFactionId) continue;
-      if (n.currentSupport < n.audienceCap) continue;
-      if (wars.some((w) => w.attackerNationId === n.id)) continue;
-      const targets = n.neighbors.map((id) => byIdNow.get(id)).filter(Boolean) as Nation[];
-      const neutral = targets.find((x) => !x.ownerFactionId) ?? null;
-      const enemy = targets.find((x) => x.ownerFactionId && x.ownerFactionId !== n.ownerFactionId) ?? null;
-      const pickTarget = neutral ?? enemy;
-      if (pickTarget && n.ownerFactionId) executeWar(n.id, pickTarget.id, n.ownerFactionId);
+      setScenePreviewUrl(`${data.outputUrl}?t=${Date.now()}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Errore");
+    } finally {
+      setRenderingScene(false);
     }
   };
 
-  // Simulation runner (start/pause + speed)
-  useEffect(() => {
-    if (!simRunning) return;
-    const t = window.setInterval(() => {
-      for (let i = 0; i < simSpeed; i++) simTickOnce();
-    }, 250);
-    return () => window.clearInterval(t);
-  }, [simRunning, simSpeed, demoMode, wars, nations, factions]); // ok for MVP
+  const scene: MotionScene | null =
+    project?.scenes.find((s) => s.id === selectedSceneId) ?? project?.scenes[0] ?? null;
 
-  // (Demo seeders removed from UI for productization.)
+  const selectedLayer: MotionLayer | null =
+    scene?.layers.find((l) => l.id === selectedLayerId) ?? null;
 
-  const clearCountrySelection = () => {
-    setSelectedCountry(null);
-    setSelectedWarId(null);
+  const bgColors = useMemo(() => {
+    const bg = scene?.background;
+    if (bg?.type === "gradient") return { from: bg.from, to: bg.to };
+    if (bg?.type === "solid") return { from: bg.color, to: bg.color };
+    return { from: "#0b1220", to: "#1e3a5f" };
+  }, [scene]);
+
+  const onSelectLayer = (layerId: string) => {
+    const owner = project?.scenes.find((s) => s.layers.some((l) => l.id === layerId));
+    if (owner) setSelectedSceneId(owner.id);
+    setSelectedLayerId(layerId);
   };
 
-  const resetMvp = () => {
-    // Reset back to a clean neutral alpha baseline (no seeded wars).
-    setWars([]);
-    setWarProposals([]);
-    setMembers([]);
-    setPlayerMemberId(null);
-    setActionCooldowns({});
-    setLastActionFeedback(null);
-    setActAsFactionId(null);
-    setFactions([]);
-    setNations(createInitialNations());
-    setSelectedCountry(null);
-    setSelectedFactionId(null);
-    setSelectedWarId(null);
-    setMoments([]);
-    setMomentGate(createInitialMomentGateState());
-    setEvents([
-      { id: "boot", ts: 0, text: "Select a country to inspect territory and command options." },
-      { id: "boot-2", ts: 0, text: "The world is waiting for its first war." },
-    ]);
+  const onPatchLayer = (layerId: string, patch: Record<string, unknown>) => {
+    if (!scene) return;
+    void patchProject({ sceneId: scene.id, layerId, layerPatch: patch });
+  };
+
+  const onDeleteLayer = (layerId: string) => {
+    if (!scene) return;
+    if (selectedLayerId === layerId) setSelectedLayerId(null);
+    void patchProject({ sceneId: scene.id, layerId, deleteLayer: true });
+  };
+
+  const onPatchPreset = (layerId: string, preset: string) => {
+    if (!scene) return;
+    void patchProject({ sceneId: scene.id, layerId, animationPreset: preset });
   };
 
   return (
-    <div className="arena-backdrop flex min-h-screen w-full max-w-[100vw] flex-col overflow-x-hidden text-zinc-100">
-      {/* World intensity overlay (tasteful, cinematic) */}
-      {worldIntensity > 0.01 ? (
-        <div
-          className="world-intensity-overlay"
-          style={{
-            // keep subtle; intensity increases during critical/multi-war moments
-            ["--war-hot" as any]: String(Math.min(0.22, 0.06 + worldIntensity * 0.18)),
-            ["--war-cyan" as any]: String(Math.min(0.18, 0.05 + worldIntensity * 0.14)),
-          }}
-          aria-hidden
-        />
-      ) : null}
-
-      <GlobalMomentBanner moments={moments} onExpire={handleMomentExpire} onShow={handleMomentShow} />
-
-      <header className="shrink-0 border-b border-white/5 px-4 py-4 lg:px-6">
-        <div className="mx-auto flex w-full max-w-[1200px] flex-wrap items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-lg font-semibold tracking-tight">BrandArena</div>
-            <div className="mt-0.5 text-sm font-semibold text-zinc-100">Claim a nation, rally your faction, and start the next war.</div>
-            <div className="mt-0.5 text-[11px] text-zinc-400">Community conflict, built for spectators.</div>
-          </div>
-          <div className="flex items-center gap-2">
-            <Link
-              href="/twitch"
-              className="rounded-2xl border border-cyan-400/25 bg-cyan-500/10 px-4 py-2 text-xs font-semibold text-cyan-50 backdrop-blur hover:bg-cyan-500/15"
-            >
-              BrandArena Live
-            </Link>
-          </div>
-        </div>
+    <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-4 bg-zinc-950 px-4 py-6 text-zinc-100">
+      <header>
+        <h1 className="text-xl font-semibold tracking-tight">Kinetta</h1>
+        <p className="mt-1 text-sm text-zinc-400">
+          Un prompt → il Director crea un MotionProject che vedi, scrubbi e modifichi nel browser.
+          Player ed export finale sono identici.
+        </p>
       </header>
 
-      <main className="min-h-0 flex-1 overflow-x-hidden px-4 pb-10 pt-4 lg:px-6">
-        <div className="mx-auto w-full max-w-[1200px] space-y-4">
-          {/* Top area: active conflicts */}
-          <section>
-            <WarTicker
-              wars={wars}
-              nations={nations}
-              factions={factions}
-              selectedWarId={selectedWarId}
-              onSelectWar={(id) => {
-                setSelectedWarId(id);
-                const w = wars.find((x) => x.id === id);
-                if (w) {
-                  const def = nationById.get(w.targetNationId);
-                  if (def) setSelectedCountry(toSelectedCountry(def.id, def.name));
-                }
-              }}
+      {/* Prompt / generation */}
+      <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
+        <textarea
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          rows={8}
+          disabled={submitting}
+          placeholder="Descrivi il video: scene, testi, dati, transizioni, camera…"
+          className="w-full resize-y rounded-xl border border-zinc-700 bg-zinc-800 px-4 py-3 text-sm text-white outline-none placeholder:text-zinc-500 disabled:opacity-50"
+        />
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          {(["16:9", "9:16", "1:1"] as AspectRatio[]).map((a) => (
+            <button
+              key={a}
+              type="button"
+              onClick={() => setAspectRatio(a)}
+              className={`rounded-full border px-3 py-1 text-xs ${
+                aspectRatio === a ? "border-white bg-white text-zinc-900" : "border-zinc-600 text-zinc-400"
+              }`}
+            >
+              {a}
+            </button>
+          ))}
+          <label className="flex items-center gap-2 text-xs text-zinc-300">
+            <input
+              type="checkbox"
+              checked={voiceoverEnabled}
+              onChange={(e) => setVoiceoverEnabled(e.target.checked)}
             />
-          </section>
-
-          {/* Main hero stage: globe */}
-          <section className="rounded-3xl border border-white/10 bg-black/20 p-2 shadow-[inset_0_0_140px_rgba(0,0,0,0.85)] sm:p-3">
-            <div className="min-h-[min(72vh,860px)]">
-              <TerritoryMap
-                selectedCountryId={selectedCountry?.id ?? null}
-                onSelectCountry={(c) => {
-                  setSelectedCountry(c);
-                  setSelectedFactionId(null);
-                }}
-                onClearSelection={clearCountrySelection}
-                nations={nations}
-                factions={factions}
-                wars={wars}
-                nationAlerts={nationAlerts}
-                screenPulse={screenPulse}
-                simulationLabel={null}
-              />
-            </div>
-          </section>
-
-          {/* Lower information section: panels below the globe */}
-          <section className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-12">
-            <div className="min-w-0 lg:col-span-6 xl:col-span-5">
-              <NationSidebar
-                nation={selectedNation}
-                owner={selectedOwner}
-                war={selectedWar}
-                neighbors={neighbors}
-                canFoundFaction={canFoundFaction}
-                canProposeWar={canProposeWar}
-                onFoundFaction={() => setFoundOpen(true)}
-                onSupport={(amt) => addSupport(amt)}
-                onProposeWar={(targetId) => proposeWar(targetId)}
-                onDefend={() => {
-                  if (!selectedNation?.ownerFactionId) return;
-                  addSupport(500);
-                  const defName = selectedOwner?.name ?? selectedNation.name;
-                  pushEvent(cinematicDefend(selectedNation.name, defName));
-                }}
-                onClearSelection={clearCountrySelection}
-              />
-            </div>
-
-            <div className="min-w-0 lg:col-span-6 xl:col-span-7">
-              <WarPanel
-                war={focusedWar}
-                attackerNation={focusedWarNations.attacker}
-                defenderNation={focusedWarNations.defender}
-                attackerFaction={focusedWarFactions.attacker}
-                defenderFaction={focusedWarFactions.defender}
-                playerSide={playerWarSide}
-                actAsFactionId={actAsFactionId}
-                factions={factions}
-                onActAsFaction={setActAsFactionId}
-                actionCooldowns={actionCooldowns}
-                lastActionFeedback={lastActionFeedback}
-                onWarAction={(warId, actionId) => performWarAction(warId, actionId)}
-              />
-            </div>
-
-            <div className="min-w-0 lg:col-span-7">
-              <FactionRolesPanel
-                members={playerFactionId ? members.filter((m) => m.factionId === playerFactionId) : []}
-                playerMemberId={playerMemberId}
-                pendingProposals={pendingProposalsForPlayer}
-                nationById={nationById}
-                onVote={voteOnProposal}
-                onPromote={promoteToGeneral}
-                onDemote={demoteGeneral}
-                onSwitchPlayer={(id) => setPlayerMemberId(id)}
-              />
-            </div>
-
-            <div className="min-w-0 lg:col-span-5">
-              <NationLeaderboard
-                factions={factions}
-                nations={nations}
-                wars={wars}
-                selectedFactionId={selectedFactionId}
-                onSelectFaction={(id) => setSelectedFactionId(id)}
-              />
-            </div>
-
-            <div className="min-w-0 lg:col-span-12">
-              <TerritoryActivityFeed events={events} />
-            </div>
-          </section>
+            Voce (ElevenLabs) — obbligatoria se vuoi audio nel MP4
+          </label>
+          <label className="flex items-center gap-2 text-xs text-zinc-400">
+            <input type="checkbox" checked={localDemo} onChange={(e) => setLocalDemo(e.target.checked)} />
+            Demo locale (fixture, no OpenAI)
+          </label>
+          <button
+            type="button"
+            onClick={() => void generateVideo()}
+            disabled={submitting || (!prompt.trim() && !localDemo)}
+            className="ml-auto rounded-xl bg-white px-5 py-2 text-sm font-medium text-zinc-900 disabled:opacity-40"
+          >
+            {submitting ? "Generazione…" : "Genera video"}
+          </button>
         </div>
-      </main>
+      </section>
 
-      <CreateFactionModal
-        open={foundOpen}
-        territory={selectedNation ? { id: selectedNation.id, name: selectedNation.name } : null}
-        onClose={() => setFoundOpen(false)}
-        onCreate={(args) => foundFaction(args)}
-      />
-    </div>
+      {error ? <p className="text-sm text-red-400">{error}</p> : null}
+
+      {project ? (
+        <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
+          <div className="flex flex-col gap-4">
+            {/* Live browser preview — same renderer used for export */}
+            <section className="rounded-2xl border border-zinc-800 bg-zinc-950 p-3">
+              <div className="mb-2 flex items-center justify-between">
+                <h2 className="text-sm font-medium text-zinc-200">Anteprima live (browser)</h2>
+                <span className="text-[11px] text-zinc-500">
+                  {project.scenes.length} scene · {project.durationSec}s · {job?.status}
+                </span>
+              </div>
+              <MotionPlayer
+                ref={playerRef}
+                project={project}
+                jobId={job?.id}
+                selectable
+                selectedLayerId={selectedLayerId}
+                onSelectLayer={onSelectLayer}
+                onBackgroundClick={() => setSelectedLayerId(null)}
+                onTimeUpdate={setCurrentMs}
+              />
+              <ProjectTimeline
+                project={project}
+                currentMs={currentMs}
+                selectedSceneId={selectedSceneId}
+                selectedLayerId={selectedLayerId}
+                onSeek={(ms) => playerRef.current?.seek(ms)}
+                onSelectScene={(id) => setSelectedSceneId(id)}
+                onSelectLayer={onSelectLayer}
+              />
+            </section>
+
+            {/* Final export result */}
+            {job?.status === "ready" && job.outputUrl ? (
+              <section className="overflow-hidden rounded-2xl border border-zinc-800 bg-black p-2">
+                <p className="px-1 pb-2 text-[11px] text-zinc-500">Export finale (MP4)</p>
+                <video
+                  key={job.outputUrl + String(job.updatedAt)}
+                  src={job.outputUrl}
+                  controls
+                  className="w-full rounded-lg"
+                />
+              </section>
+            ) : null}
+          </div>
+
+          {/* Editor sidebar */}
+          <div className="flex flex-col gap-4">
+            <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
+              <div className="mb-2 flex items-center justify-between">
+                <h2 className="text-sm font-medium">Scene</h2>
+                <div className="flex gap-2">
+                  {scene ? (
+                    <button
+                      type="button"
+                      onClick={() => void onRenderScene(scene.id)}
+                      disabled={renderingScene || submitting}
+                      className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-800 disabled:opacity-40"
+                    >
+                      {renderingScene ? "Scena…" : "Render scena"}
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => void onRerender()}
+                    disabled={submitting}
+                    className="rounded-lg bg-white px-3 py-1.5 text-xs font-medium text-zinc-900 disabled:opacity-40"
+                  >
+                    {submitting ? "Render…" : "Esporta MP4"}
+                  </button>
+                </div>
+              </div>
+              {scenePreviewUrl ? (
+                <video
+                  key={scenePreviewUrl}
+                  src={scenePreviewUrl}
+                  controls
+                  autoPlay
+                  loop
+                  className="mt-3 w-full rounded-lg border border-zinc-800"
+                />
+              ) : null}
+              <div className="flex flex-wrap gap-1.5">
+                {project.scenes.map((s, i) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedSceneId(s.id);
+                      setSelectedLayerId(null);
+                      playerRef.current?.seek(s.startSec * 1000 + 10);
+                    }}
+                    className={`rounded-lg border px-2.5 py-1 text-xs ${
+                      s.id === selectedSceneId
+                        ? "border-blue-400 bg-blue-500/10 text-blue-200"
+                        : "border-zinc-700 text-zinc-400 hover:bg-zinc-800"
+                    }`}
+                  >
+                    {i + 1}. {s.name}
+                  </button>
+                ))}
+              </div>
+            </section>
+
+            {scene ? (
+              <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
+                <h2 className="mb-2 text-sm font-medium">Scena: {scene.name}</h2>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <label className="text-xs text-zinc-400">
+                    Nome
+                    <input
+                      className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white"
+                      value={scene.name}
+                      onChange={(e) => void patchProject({ sceneId: scene.id, sceneName: e.target.value })}
+                    />
+                  </label>
+                  <label className="text-xs text-zinc-400">
+                    Durata (s)
+                    <input
+                      type="number"
+                      min={1}
+                      max={8}
+                      step={0.5}
+                      className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white"
+                      value={scene.durationSec}
+                      onChange={(e) =>
+                        void patchProject({ sceneId: scene.id, sceneDurationSec: Number(e.target.value) })
+                      }
+                    />
+                  </label>
+                  <label className="text-xs text-zinc-400">
+                    Sfondo (da)
+                    <input
+                      type="color"
+                      className="mt-1 h-10 w-full cursor-pointer rounded-lg border border-zinc-700 bg-zinc-800"
+                      value={bgColors.from}
+                      onChange={(e) =>
+                        void patchProject({
+                          sceneId: scene.id,
+                          backgroundFrom: e.target.value,
+                          backgroundTo: bgColors.to,
+                        })
+                      }
+                    />
+                  </label>
+                  <label className="text-xs text-zinc-400">
+                    Sfondo (a)
+                    <input
+                      type="color"
+                      className="mt-1 h-10 w-full cursor-pointer rounded-lg border border-zinc-700 bg-zinc-800"
+                      value={bgColors.to}
+                      onChange={(e) =>
+                        void patchProject({
+                          sceneId: scene.id,
+                          backgroundFrom: bgColors.from,
+                          backgroundTo: e.target.value,
+                        })
+                      }
+                    />
+                  </label>
+                  <label className="text-xs text-zinc-400 sm:col-span-2">
+                    Transizione
+                    <select
+                      className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white"
+                      value={scene.transitionOut?.type ?? "fade"}
+                      onChange={(e) => void patchProject({ sceneId: scene.id, transitionType: e.target.value })}
+                    >
+                      {["cut", "fade", "slideLeft", "slideUp", "zoom", "whipLeft", "whipRight"].map((t) => (
+                        <option key={t} value={t}>
+                          {t}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-xs text-zinc-400 sm:col-span-2">
+                    Narrazione (voce)
+                    <textarea
+                      rows={2}
+                      className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white"
+                      value={scene.narration ?? ""}
+                      onChange={(e) => void patchProject({ sceneId: scene.id, sceneNarration: e.target.value })}
+                      placeholder="Testo parlato per questa scena…"
+                    />
+                  </label>
+                </div>
+
+                {/* Layer list */}
+                <h3 className="mt-4 mb-2 text-xs font-medium text-zinc-400">Layer</h3>
+                <ul className="space-y-1">
+                  {[...scene.layers]
+                    .sort((a, b) => b.zIndex - a.zIndex)
+                    .map((l) => (
+                      <li key={l.id} className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => onSelectLayer(l.id)}
+                          className={`flex min-w-0 flex-1 items-center justify-between rounded-lg border px-2.5 py-1.5 text-left text-xs ${
+                            l.id === selectedLayerId
+                              ? "border-blue-400 bg-blue-500/10 text-blue-100"
+                              : "border-zinc-800 text-zinc-300 hover:bg-zinc-800"
+                          }`}
+                        >
+                          <span className="truncate">{layerLabel(l)}</span>
+                          <span className="ml-2 shrink-0 text-[10px] text-zinc-500">{l.type}</span>
+                        </button>
+                        <button
+                          type="button"
+                          title="Rimuovi layer"
+                          onClick={() => onDeleteLayer(l.id)}
+                          className="shrink-0 rounded-lg border border-zinc-800 px-2 py-1.5 text-[11px] text-zinc-500 hover:border-red-800 hover:bg-red-950/40 hover:text-red-300"
+                        >
+                          ✕
+                        </button>
+                      </li>
+                    ))}
+                </ul>
+              </section>
+            ) : null}
+
+            <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4">
+              <h2 className="mb-2 text-sm font-medium">Inspector</h2>
+              {scene ? (
+                <LayerInspector
+                  scene={scene}
+                  layer={selectedLayer}
+                  onPatchLayer={onPatchLayer}
+                  onPatchPreset={onPatchPreset}
+                  onDeleteLayer={onDeleteLayer}
+                />
+              ) : null}
+            </section>
+          </div>
+        </div>
+      ) : (
+        <section className="flex aspect-video items-center justify-center rounded-2xl border border-zinc-800 bg-zinc-900 text-sm text-zinc-500">
+          {submitting ? STATUS_LABEL[job?.status ?? "queued"] : "Genera un video per iniziare"}
+        </section>
+      )}
+
+      {job ? (
+        <section className="rounded-2xl border border-zinc-800 bg-zinc-950 p-3">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-medium text-zinc-200">
+              Log pipeline · {STATUS_LABEL[job.status] ?? job.status}
+            </h2>
+            <span className="text-[11px] text-zinc-500">
+              {job.status !== "ready" && job.status !== "failed"
+                ? (() => {
+                    const ageSec = Math.max(0, Math.round((nowTick - job.updatedAt) / 1000));
+                    if (ageSec > 60) {
+                      return (
+                        <span className="text-amber-400">
+                          nessun aggiornamento da {ageSec}s — possibile blocco
+                        </span>
+                      );
+                    }
+                    return <span>ultimo update {ageSec}s fa</span>;
+                  })()
+                : null}
+            </span>
+          </div>
+          {job.error ? (
+            <p className="mb-2 rounded-lg border border-red-900/60 bg-red-950/40 px-2 py-1 text-xs text-red-300">
+              {job.error}
+            </p>
+          ) : null}
+          <ul className="max-h-48 space-y-0.5 overflow-auto font-mono text-[11px] text-zinc-400">
+            {job.logs.map((line, i) => (
+              <li
+                key={`${i}-${line.slice(0, 40)}`}
+                className={i === job.logs.length - 1 ? "text-zinc-200" : undefined}
+              >
+                {line}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+    </main>
   );
 }
-
-function rank(p: "low" | "medium" | "high" | "critical") {
-  return p === "critical" ? 4 : p === "high" ? 3 : p === "medium" ? 2 : 1;
-}
-
