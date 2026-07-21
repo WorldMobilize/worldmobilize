@@ -12,7 +12,11 @@ async function checkOpenAI(): Promise<CheckResult> {
     const model = process.env.DIRECTOR_MODEL?.trim() || "gpt-4o";
     const res = await client.chat.completions.create({
       model,
-      max_completion_tokens: 16,
+      // Reasoning models (gpt-5.x) spend completion tokens on reasoning before
+      // emitting a single character, so a 16-token cap fails this probe with
+      // "max_tokens ... reached" even when the key and model are perfectly fine.
+      // Billing follows actual usage (~23 tokens here), not the cap.
+      max_completion_tokens: 2000,
       messages: [{ role: "user", content: 'Reply in JSON with exactly: {"ok":true}' }],
       response_format: { type: "json_object" },
     });
