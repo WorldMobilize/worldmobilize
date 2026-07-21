@@ -3,11 +3,11 @@ const Database = require("better-sqlite3");
 const fs = require("fs");
 const path = require("path");
 
+// Run from the repo root. Override with `KINETTA_DB=/path/to/motionvid.db`.
 const candidates = [
+  process.env.KINETTA_DB,
   path.join(process.cwd(), "data", "motionvid.db"),
-  path.join("C:/Users/della/worldmobilize/data/motionvid.db"),
-  path.join("C:/Users/della/data/motionvid.db"),
-];
+].filter(Boolean);
 
 for (const p of candidates) {
   console.log("\nDB?", p, "exists=", fs.existsSync(p));
