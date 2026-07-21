@@ -35,6 +35,40 @@ export function staticAssetPath(fileName: string) {
   return path.join(process.cwd(), "public", "assets", fileName);
 }
 
+/** Does this gen: asset describe an atmosphere plate rather than an object? */
+function isBackdropPrompt(prompt: string, assetId: string): boolean {
+  return /\bbackdrop|background|\bbg\b|atmosphere|gradient|full-?bleed|glow|ambient\b/i.test(
+    `${assetId} ${prompt}`,
+  );
+}
+
+/** Soft brand-colored gradient plate — the honest stand-in for a missing Flux backdrop. */
+async function writeBrandGradient(args: {
+  outPath: string;
+  width: number;
+  height: number;
+  brand: MotionProject["brand"];
+}): Promise<void> {
+  const { outPath, brand } = args;
+  const width = Math.max(64, Math.round(args.width));
+  const height = Math.max(64, Math.round(args.height));
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="${brand.backgroundColor}"/>
+      <stop offset="100%" stop-color="${brand.primaryColor}"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="50%" cy="45%" r="55%">
+      <stop offset="0%" stop-color="${brand.accentColor}" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="${brand.accentColor}" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="${width}" height="${height}" fill="url(#g)"/>
+  <rect width="${width}" height="${height}" fill="url(#halo)"/>
+</svg>`;
+  await sharp(Buffer.from(svg)).png().toFile(outPath);
+}
+
 const BUILTIN_IDS = [
   "builtin:gradient-panel",
   "builtin:dashboard",
@@ -360,6 +394,21 @@ export async function prepareProjectAssets(project: MotionProject): Promise<Proj
       });
     } else {
       console.warn(`[assets] Flux not configured — fallback for ${assetId}`);
+    }
+
+    if (!ok) {
+      // A background plate is the one case where the card builtin is actively
+      // wrong: it paints a UI skeleton full-bleed across the scene. Synthesize a
+      // brand gradient instead — that is what the prompt asked for anyway.
+      if (isBackdropPrompt(job.prompt, assetId)) {
+        await writeBrandGradient({
+          outPath: filePath,
+          width: job.width || project.format.width,
+          height: job.height || project.format.height,
+          brand: project.brand,
+        });
+        ok = true;
+      }
     }
 
     if (!ok) {

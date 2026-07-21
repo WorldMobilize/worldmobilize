@@ -191,7 +191,7 @@ function buildBaseLayer(
       ...base,
       type: "component",
       component,
-      props: defaultProps(component, brand, planned),
+      props: defaultProps(component, brand),
     };
   }
   if (planned.kind === "shape") {
@@ -215,7 +215,8 @@ function buildBaseLayer(
   return {
     ...base,
     type: "text",
-    text: planned.note || "Headline",
+    // Same reason as defaultProps: the note is a brief, not copy.
+    text: "",
     fontSize: planned.role === "headline" ? 64 : 28,
     fontWeight: planned.role === "headline" ? 800 : 500,
     color: brand.foregroundColor,
@@ -226,17 +227,20 @@ function buildBaseLayer(
 function defaultProps(
   component: string,
   brand: DirectorPlan["brand"],
-  planned: PlannedLayer,
 ): Record<string, unknown> {
+  // `planned.note` is an instruction to the arms ("use fact: ROAS 4.2x"), never
+  // on-screen copy — rendering it leaks the brief into the video. Leave the
+  // visible slots empty for the Copy arm and let fillComponentCopy() settle
+  // whatever is still blank afterwards.
   switch (component) {
     case "MetricCard":
       return {
-        label: planned.note || "Metric",
+        label: "",
         value: "—",
         accent: brand.accentColor,
       };
     case "BrandChip":
-      return { label: planned.note || "Feature", color: brand.primaryColor };
+      return { label: "", color: brand.primaryColor };
     case "ChatDemo":
       return {
         question: "How does it work?",
@@ -264,14 +268,52 @@ function defaultProps(
       };
     case "LogoLockup":
       return {
-        wordmark: "Brand",
-        tagline: planned.note || "",
+        wordmark: "",
+        tagline: "",
         logo: "capsule",
         color: brand.foregroundColor,
       };
     default:
       return {};
   }
+}
+
+/** First word of the title, as the stand-in wordmark ("dtcpill Launch" → "dtcpill"). */
+function wordmarkFromTitle(title: string): string {
+  const word = title.trim().split(/\s+/)[0]?.replace(/[^\p{L}\p{N}._-]/gu, "") ?? "";
+  return word.length >= 2 ? word : title.trim().slice(0, 24);
+}
+
+/**
+ * Last line of defence for on-screen text. A layer that reaches here with an
+ * empty slot means the Copy arm skipped it — it is NOT an invitation to fall
+ * back to the brief. The brand wordmark gets the title, everything else with
+ * nothing to say is dropped: an empty chip renders as a grey blob, and a blank
+ * headline holds layout space for words that never arrive.
+ */
+function fillCopyGaps(scenes: MotionScene[], title: string): MotionScene[] {
+  return scenes.map((scene) => {
+    const layers = scene.layers.filter((layer) => {
+      if (layer.type === "text") return layer.text.trim().length > 0;
+      if (layer.type !== "component") return true;
+      if (layer.component === "LogoLockup") return true;
+      if (layer.component === "BrandChip" || layer.component === "MetricCard") {
+        return String(layer.props.label ?? "").trim().length > 0;
+      }
+      return true;
+    });
+
+    return {
+      ...scene,
+      layers: (layers.length > 0 ? layers : scene.layers).map((layer) =>
+        layer.type === "component" &&
+        layer.component === "LogoLockup" &&
+        !String(layer.props.wordmark ?? "").trim()
+          ? { ...layer, props: { ...layer.props, wordmark: wordmarkFromTitle(title) } }
+          : layer,
+      ),
+    };
+  });
 }
 
 /**
@@ -552,7 +594,7 @@ export function mergeArmOutputs(opts: {
     format: { ...size, fps: 30, aspectRatio },
     durationSec,
     brand: plan.brand,
-    scenes,
+    scenes: fillCopyGaps(scenes, plan.title),
     audio: {
       voiceover: {
         enabled: voiceoverEnabled,

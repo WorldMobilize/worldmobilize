@@ -27,6 +27,7 @@
 # debug
 .next-dev.log
 .next-dev.err.log
+.next-prod.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

@@ -85,18 +85,30 @@ export async function exportFrames(opts: {
       deviceScaleFactor: 1,
     });
 
-    // Time is driven purely through the `?t=` query param, which the server
-    // renders directly. This makes frame capture independent of client-side
-    // hydration (unreliable under Next dev + HMR) and fully deterministic.
-    for (let f = 0; f < totalFrames; f++) {
-      const globalFrame = startFrame + f;
-      const ms = Math.round(globalFrame * frameStep);
-      await page.goto(`${baseUrl}/render/${jobId}?t=${ms}`, {
-        waitUntil: "load",
-        timeout: 60000,
-      });
-      // Ensure images/fonts/WebGL canvas are ready before the screenshot.
-      await page
+    // Preferred path: load the page once, wait for hydration, then seek. Client-
+    // only layers (the WebGL PillHero/Capsule3D mount behind `dynamic ssr:false`)
+    // exist only after hydration, so the per-frame `?t=` reload below screenshots
+    // before they ever appear — it captured a video with no hero pill in it.
+    // Hydration does not complete under `next dev` + Turbopack HMR in headless
+    // Chromium, so that reload path stays as the fallback.
+    await page.goto(`${baseUrl}/render/${jobId}?t=${startMs}`, {
+      waitUntil: "load",
+      timeout: 60000,
+    });
+    const hydrated = await page
+      .waitForFunction(() => window.__motionReady === true, undefined, { timeout: 20000 })
+      .then(() => true)
+      .catch(() => false);
+    if (!hydrated) {
+      console.warn(
+        `[export] ${jobId}: page never hydrated — falling back to per-frame SSR. ` +
+          `WebGL layers (PillHero, Capsule3D) will be missing. Export against \`next start\`, not \`next dev\`.`,
+      );
+    }
+
+    /** Let images, fonts and demand-framed R3F canvases settle before capture. */
+    const settle = () =>
+      page
         .evaluate(async () => {
           await Promise.all(
             Array.from(document.images).map((img) =>
@@ -112,8 +124,22 @@ export async function exportFrames(opts: {
         })
         .catch(() => undefined);
 
+    const stage = page.locator("[data-render-root]");
+    for (let f = 0; f < totalFrames; f++) {
+      const globalFrame = startFrame + f;
+      const ms = Math.round(globalFrame * frameStep);
+
+      if (hydrated) {
+        await page.evaluate((at: number) => window.__motionSeek?.(at), ms);
+      } else {
+        await page.goto(`${baseUrl}/render/${jobId}?t=${ms}`, {
+          waitUntil: "load",
+          timeout: 60000,
+        });
+      }
+      await settle();
+
       const file = path.join(dir, `frame_${String(globalFrame).padStart(6, "0")}.png`);
-      const stage = page.locator("[data-render-root]");
       await stage.screenshot({ path: file, clip: { x: 0, y: 0, width, height } });
       opts.onProgress?.(f + 1, totalFrames);
     }
