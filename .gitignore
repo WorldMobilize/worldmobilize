@@ -49,3 +49,6 @@ next-env.d.ts
 
 # local sqlite
 /data/
+
+# claude code: personal overrides, not shared
+.claude/settings.local.json

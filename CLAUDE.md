@@ -152,6 +152,21 @@ Change, in order of value:
 
 ---
 
+## Staying in sync
+
+Two people work on this repo, both with Claude attached. `.claude/settings.json`
+registers a `SessionStart` hook (`.claude/hooks/git-sync-check.sh`) that fetches and
+reports whether the checkout is behind `origin/main`.
+
+It is **read-only on purpose** — it never checks out, merges or pulls. An automatic
+`git checkout main` would yank whoever is mid-feature onto another branch, and an
+unattended `git pull` can stop halfway through a conflict with nobody watching. The hook
+makes staleness visible; acting on it stays a human decision. It also stays silent when
+there is nothing to report, so the one time it does speak is worth reading.
+
+If it says you are behind, pull before you start — and re-read this file afterwards, since
+it may have changed.
+
 ## Conventions
 
 - Tests: `npm test` (vitest). `npm run typecheck`, `npm run lint`.
