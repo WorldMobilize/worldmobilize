@@ -5,6 +5,27 @@ import { transitionDurationMs, transitionStyles } from "@/components/motion/tran
 import { sceneWindows } from "@/lib/motion/timing";
 import type { MotionProject, ProjectAsset } from "@/lib/motion/types";
 
+/** Families that are actually loaded and can end a stack. */
+const FONT_FALLBACKS = ["Inter", "system-ui", "sans-serif"];
+
+/**
+ * Build a CSS font stack that *ends* in something we ship.
+ *
+ * The Director picks brand fonts freely, and it picks families we never load —
+ * "Inter Tight" was the one that surfaced this. Assigning that name alone left
+ * the browser with a family it could not resolve and no fallback after it, so
+ * headless Chromium dropped to its default serif and every video came out
+ * looking like Times New Roman. The brand font goes first, but it can only ever
+ * be the first entry, never the whole stack.
+ */
+function fontStack(brandFamily: string | undefined): string {
+  const family = brandFamily?.trim();
+  if (!family) return FONT_FALLBACKS.join(", ");
+  // Multi-word families need quoting to survive as a single stack entry.
+  const head = /[^a-zA-Z0-9-]/.test(family) && !/^["']/.test(family) ? `"${family}"` : family;
+  return [head, ...FONT_FALLBACKS.filter((f) => f !== family)].join(", ");
+}
+
 /**
  * Renders a MotionProject at its native resolution for a single point in time.
  * This is the exact DOM that the Playwright exporter screenshots, guaranteeing
@@ -95,7 +116,7 @@ export function MotionCanvas({
         height,
         overflow: "hidden",
         background: project.brand.backgroundColor ?? "#0b1220",
-        fontFamily: project.brand.fontFamily ?? "Inter, system-ui, sans-serif",
+        fontFamily: fontStack(project.brand.fontFamily),
       }}
       onClick={selectable && onBackgroundClick ? () => onBackgroundClick() : undefined}
     >

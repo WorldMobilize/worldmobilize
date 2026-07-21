@@ -273,6 +273,8 @@ function defaultProps(
         logo: "capsule",
         color: brand.foregroundColor,
       };
+    case "Wordmark":
+      return { text: "", color: brand.foregroundColor };
     default:
       return {};
   }
@@ -284,19 +286,31 @@ function wordmarkFromTitle(title: string): string {
   return word.length >= 2 ? word : title.trim().slice(0, 24);
 }
 
+/** Components whose whole job is to say the brand name. */
+const WORDMARK_COMPONENTS = new Set(["LogoLockup", "Wordmark"]);
+
+/** Where each of them expects that name to arrive. */
+function wordmarkPropFor(component: string): "wordmark" | "text" {
+  return component === "Wordmark" ? "text" : "wordmark";
+}
+
 /**
  * Last line of defence for on-screen text. A layer that reaches here with an
  * empty slot means the Copy arm skipped it — it is NOT an invitation to fall
  * back to the brief. The brand wordmark gets the title, everything else with
  * nothing to say is dropped: an empty chip renders as a grey blob, and a blank
  * headline holds layout space for words that never arrive.
+ *
+ * This used to cover LogoLockup alone. The Director also emits `Wordmark`, which
+ * fell straight through with empty props and rendered its placeholder — shipping
+ * videos whose closing shot read "Brand" instead of the client's name.
  */
 function fillCopyGaps(scenes: MotionScene[], title: string): MotionScene[] {
   return scenes.map((scene) => {
     const layers = scene.layers.filter((layer) => {
       if (layer.type === "text") return layer.text.trim().length > 0;
       if (layer.type !== "component") return true;
-      if (layer.component === "LogoLockup") return true;
+      if (WORDMARK_COMPONENTS.has(layer.component)) return true;
       if (layer.component === "BrandChip" || layer.component === "MetricCard") {
         return String(layer.props.label ?? "").trim().length > 0;
       }
@@ -305,13 +319,19 @@ function fillCopyGaps(scenes: MotionScene[], title: string): MotionScene[] {
 
     return {
       ...scene,
-      layers: (layers.length > 0 ? layers : scene.layers).map((layer) =>
-        layer.type === "component" &&
-        layer.component === "LogoLockup" &&
-        !String(layer.props.wordmark ?? "").trim()
-          ? { ...layer, props: { ...layer.props, wordmark: wordmarkFromTitle(title) } }
-          : layer,
-      ),
+      layers: (layers.length > 0 ? layers : scene.layers).map((layer) => {
+        if (layer.type !== "component" || !WORDMARK_COMPONENTS.has(layer.component)) return layer;
+        const slot = wordmarkPropFor(layer.component);
+        // Either spelling counts as filled — the catalog documents Wordmark as
+        // taking `text|wordmark`, so honour whichever one the arm supplied.
+        // Nullish coalescing is wrong here: defaultProps seeds these slots with
+        // "", which `??` treats as a real value and would overwrite anyway.
+        const given = [layer.props[slot], layer.props.wordmark, layer.props.text]
+          .map((v) => String(v ?? "").trim())
+          .find((v) => v.length > 0);
+        if (given) return layer;
+        return { ...layer, props: { ...layer.props, [slot]: wordmarkFromTitle(title) } };
+      }),
     };
   });
 }

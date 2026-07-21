@@ -18,6 +18,17 @@ export type PillMeshProps = {
   tilt?: number;
 };
 
+/**
+ * Y offset of the whole stage (capsule + contact shadow) below the origin.
+ *
+ * The camera must aim at exactly this height. It used to aim at -0.18 while the
+ * group sat at -0.08, and those 0.10 world units pushed the capsule 17.5px above
+ * the centre of a 400px layer box — far enough that `overflow: hidden` sheared
+ * the top off the white cap. Both values now derive from this constant so they
+ * cannot drift apart again.
+ */
+const STAGE_Y = -0.08;
+
 function glossyMaterial(color: string) {
   return new THREE.MeshPhysicalMaterial({
     color,
@@ -92,8 +103,8 @@ function FitCamera({ width, height }: { width: number; height: number }) {
     if (camera instanceof THREE.PerspectiveCamera) {
       camera.aspect = width / height;
       camera.position.set(0, 0, 3.15);
-      // Frame pill + soft shadow as one centered unit
-      camera.lookAt(0, -0.18, 0);
+      // Aim at the stage centre, so the capsule lands in the middle of the box.
+      camera.lookAt(0, STAGE_Y, 0);
       camera.updateProjectionMatrix();
     }
     invalidate();
@@ -112,7 +123,7 @@ function Scene(props: PillMeshProps & { width: number; height: number }) {
       <directionalLight position={[-3, 2, -2]} intensity={0.35} />
       <spotLight position={[2, 5, 2]} angle={0.4} penumbra={0.6} intensity={0.7} />
       <Environment preset="studio" />
-      <group position={[0, -0.08, 0]}>
+      <group position={[0, STAGE_Y, 0]}>
         <CapsuleModel {...mesh} />
         <ContactShadows
           position={[0, -1.02, 0]}
@@ -187,7 +198,7 @@ export function PillCanvas(props: PillMeshProps) {
           onCreated={({ gl, camera }) => {
             gl.setClearColor(0x000000, 0);
             gl.setSize(box.w, box.h, false);
-            camera.lookAt(0, -0.18, 0);
+            camera.lookAt(0, STAGE_Y, 0);
           }}
         >
           <Scene {...props} width={box.w} height={box.h} />

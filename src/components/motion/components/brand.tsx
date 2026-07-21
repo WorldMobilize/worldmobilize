@@ -49,7 +49,15 @@ export function LogoLockup({ layer, props, progress, brand, jobId, assets }: Mot
 }
 
 export function Wordmark({ layer, props, brand }: MotionComponentProps) {
-  const text = asString(props.text, asString(props.wordmark, "Brand"));
+  // Both spellings are documented in the catalog, and `props.text` is seeded to
+  // "" upstream — so this must fall through on empty, not merely on missing.
+  // asString returns "" verbatim rather than its fallback, which would have
+  // dropped a wordmark that arrived under the other name.
+  //
+  // No placeholder at the end: the merge step fills this from the project title,
+  // and if that ever fails again an empty lockup reads as "something is
+  // missing", whereas the old "Brand" default shipped a confident, wrong name.
+  const text = asString(props.text).trim() || asString(props.wordmark).trim();
   const accent = asString(props.color, brandAccent(brand));
   return (
     <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: accent, fontWeight: 900, fontSize: fitFont(layer.width, layer.height, 0.22, 64), letterSpacing: -1.5 }}>
