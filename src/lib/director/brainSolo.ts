@@ -1,7 +1,12 @@
 import { catalogPromptBlock } from "@/components/motion/components/catalog";
 import { brainModel, callOpenAIJson, persistJson } from "@/lib/director/openai";
 import { formatForAspect } from "@/lib/motion/validate";
-import type { AspectRatio } from "@/lib/motion/types";
+import type { AspectRatio, ReferenceImage } from "@/lib/motion/types";
+import type { ChatMessage } from "@/lib/director/openai";
+import {
+  referenceImageBrief,
+  referenceImageParts,
+} from "@/lib/director/referenceImages";
 
 /**
  * Brain-as-executor mode: one gpt-5.5 call returns a full MotionProject.
@@ -99,6 +104,7 @@ export async function runBrainSolo(opts: {
   aspectRatio: AspectRatio;
   durationTargetSec: number;
   voiceoverEnabled: boolean;
+  referenceImages?: ReferenceImage[];
 }): Promise<unknown> {
   const size = formatForAspect(opts.aspectRatio);
   const model = brainModel();
@@ -116,10 +122,20 @@ export async function runBrainSolo(opts: {
     `Return the complete MotionProject JSON now.`,
   ].join("\n");
 
+  // Arms-off builds the whole project in this one call, so if the references
+  // are not attached here they are not seen at all — the multi-agent path was
+  // wired first and this one was left behind.
+  const refs = opts.referenceImages ?? [];
+  const imageParts = refs.length ? await referenceImageParts(refs) : [];
+  const userContent: ChatMessage["content"] = imageParts.length
+    ? [{ type: "text", text: `${user}
+${referenceImageBrief(refs)}` }, ...imageParts]
+    : user;
+
   const raw = await callOpenAIJson({
     model,
     system: BRAIN_SOLO_SYSTEM,
-    messages: [{ role: "user", content: user }],
+    messages: [{ role: "user", content: userContent }],
     label: "brain-solo",
   });
   await persistJson(opts.jobId, "brain-solo.json", raw);

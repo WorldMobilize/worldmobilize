@@ -150,6 +150,7 @@ export async function createMotionProject(opts: DirectorOptions): Promise<{
     log(opts, `Brain-solo ${brain} (arms disabled)…`);
     const draft = await runBrainSolo({
       jobId: opts.jobId,
+      referenceImages: opts.referenceImages,
       prompt: opts.prompt,
       aspectRatio: opts.aspectRatio,
       durationTargetSec: opts.durationTargetSec,
@@ -162,6 +163,10 @@ export async function createMotionProject(opts: DirectorOptions): Promise<{
       titleFromPrompt(opts.prompt),
       brain,
     );
+    const snappedSolo = snapReferenceAssetIds(project, opts.referenceImages);
+    if (snappedSolo > 0) {
+      log(opts, `Riferimenti: ${snappedSolo} layer ricondotti all'immagine caricata`);
+    }
     log(
       opts,
       `Brain-solo validated (${attempts} pass(es)) — "${project.title}" · ${project.scenes.length} scenes · ${project.durationSec}s`,
