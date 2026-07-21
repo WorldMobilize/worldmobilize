@@ -121,15 +121,81 @@ function textSizeBounds(canvasW: number, canvasH: number) {
   };
 }
 
+function parseHex(hex: string): { r: number; g: number; b: number } | null {
+  const m = /^#?([0-9a-f]{6}|[0-9a-f]{3})$/i.exec(hex.trim());
+  if (!m) return null;
+  const h = m[1]!.length === 3 ? m[1]!.replace(/./g, (c) => c + c) : m[1]!;
+  return {
+    r: parseInt(h.slice(0, 2), 16),
+    g: parseInt(h.slice(2, 4), 16),
+    b: parseInt(h.slice(4, 6), 16),
+  };
+}
+
+function toHex(r: number, g: number, b: number): string {
+  const c = (n: number) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, "0");
+  return `#${c(r)}${c(g)}${c(b)}`;
+}
+
+/** Relative luminance (WCAG), so "how bright" means what the eye means by it. */
+function luminance(hex: string): number | null {
+  const c = parseHex(hex);
+  if (!c) return null;
+  const lin = (v: number) => {
+    const s = v / 255;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  };
+  return 0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b);
+}
+
+/**
+ * How far a background may sit above the brand's own background luminance.
+ * Small on purpose: a backdrop is meant to be read *through*, and anything
+ * brighter than this stops being scenery and starts competing with the content.
+ */
+const MAX_BACKGROUND_LIFT = 0.06;
+
+/**
+ * Keep a background stop behaving like a background.
+ *
+ * Given a saturated brand colour, the arms reach for it at full strength — and
+ * repairBackground below used to default to exactly that too. A brief asking
+ * for a "deep near-black background with a very subtle orange glow" came back
+ * as a gradient running to #FF641C, which is half a screen of solid orange: a
+ * linear ramp to a saturated accent is 50% accent no matter how the brief
+ * phrased it.
+ *
+ * The brain already states how bright backgrounds should be, in
+ * brand.backgroundColor. That is treated as the authority here: hue is kept,
+ * brightness is pulled back toward it. A stop darker than the brand background
+ * is left alone — dark is never the failure mode.
+ */
+function calmBackgroundStop(stop: string, base: string): string {
+  const stopLum = luminance(stop);
+  const baseLum = luminance(base);
+  const stopRgb = parseHex(stop);
+  const baseRgb = parseHex(base);
+  if (stopLum == null || baseLum == null || !stopRgb || !baseRgb) return stop;
+
+  const lift = stopLum - baseLum;
+  if (lift <= MAX_BACKGROUND_LIFT) return stop;
+
+  // Luminance moves near enough linearly with the mix to solve directly.
+  const t = Math.max(0, Math.min(1, MAX_BACKGROUND_LIFT / lift));
+  return toHex(
+    baseRgb.r + (stopRgb.r - baseRgb.r) * t,
+    baseRgb.g + (stopRgb.g - baseRgb.g) * t,
+    baseRgb.b + (stopRgb.b - baseRgb.b) * t,
+  );
+}
+
 function repairBackground(raw: unknown, brandBg: string, brandAccent: string): Record<string, unknown> {
   const b = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   const type = asStr(b.type, "solid").toLowerCase();
 
   if (type === "solid" || type === "color" || type === "fill" || type === "plain") {
-    return {
-      type: "solid",
-      color: asStr(b.color ?? b.fill ?? b.background, brandBg) || brandBg,
-    };
+    const color = asStr(b.color ?? b.fill ?? b.background, brandBg) || brandBg;
+    return { type: "solid", color: calmBackgroundStop(color, brandBg) };
   }
   if (type === "gradient" || type === "linear" || type === "radial") {
     // The Director commonly emits `colors: [from, to]` instead of from/to. That
@@ -137,12 +203,14 @@ function repairBackground(raw: unknown, brandBg: string, brandAccent: string): R
     // to the brand pair — which is why generated videos reused one background
     // and varied only `angle`, the one key that happened to line up.
     const pair = Array.isArray(b.colors) ? b.colors : [];
+    const from = asStr(b.from ?? b.colorFrom ?? b.start ?? b.color ?? pair[0], brandBg) || brandBg;
+    const to =
+      asStr(b.to ?? b.colorTo ?? b.end ?? b.accent ?? pair[1] ?? brandAccent, brandAccent) ||
+      brandAccent;
     return {
       type: "gradient",
-      from: asStr(b.from ?? b.colorFrom ?? b.start ?? b.color ?? pair[0], brandBg) || brandBg,
-      to:
-        asStr(b.to ?? b.colorTo ?? b.end ?? b.accent ?? pair[1] ?? brandAccent, brandAccent) ||
-        brandAccent,
+      from: calmBackgroundStop(from, brandBg),
+      to: calmBackgroundStop(to, brandBg),
       angle: asNum(b.angle, 160),
     };
   }
@@ -158,7 +226,7 @@ function repairBackground(raw: unknown, brandBg: string, brandAccent: string): R
   return {
     type: "gradient",
     from: brandBg,
-    to: brandAccent,
+    to: calmBackgroundStop(brandAccent, brandBg),
     angle: 160,
   };
 }
