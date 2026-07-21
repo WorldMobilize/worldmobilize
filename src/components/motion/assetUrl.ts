@@ -26,6 +26,11 @@ export function resolveAssetUrl(
     }
   }
 
+  // Uploaded reference images. Deterministic like the ids below, and job
+  // independent on purpose: one upload can seed several attempts, so it must
+  // not live in a job folder that each render wipes and rebuilds.
+  if (/^ref_[a-z0-9_]+$/i.test(assetId)) return `/uploads/${assetId}.png`;
+
   if (assetId.startsWith("builtin:")) {
     const name = assetId.replace("builtin:", "");
     if (jobId) return `/generated/${jobId}/assets/${name}.png`;

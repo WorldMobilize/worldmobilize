@@ -1,4 +1,4 @@
-import type { AspectRatio } from "@/lib/motion/types";
+import type { AspectRatio, ReferenceImage } from "@/lib/motion/types";
 import { formatForAspect } from "@/lib/motion/validate";
 import type { DirectorPlan } from "@/lib/director/brain";
 import { armModel, callOpenAIJson, persistJson } from "@/lib/director/openai";
@@ -178,13 +178,31 @@ Return ONLY JSON:
 
 HARD rules:
 - type MUST be "image". No text layers. No components with words.
-- assetId MUST be "gen:<stable_id>" (e.g. gen:phone_frame, gen:bg_hero).
+- assetId MUST be "gen:<stable_id>" (e.g. gen:phone_frame, gen:bg_hero) for plates YOU invent.
+- EXCEPTION: if the context lists reference images the user uploaded, a layer meant to show
+  one of them MUST carry that exact "ref_..." assetId and NO imagePrompt. Never ask Flux to
+  redraw a logo or product the user already supplied.
 - imagePrompt MUST demand: photoreal/graphic still, NO text, NO letters, NO logos with words, NO UI labels. Blank screens / empty regions for overlays.
 - Coordinates: x,y are TOP-LEFT (not center).
 - Phone / Claude mobile: one nearly full-height device frame with blank dark screen (Dynamic Island ok). On 9:16 prefer ~full canvas height.
 - zIndex low (0–2) so copy sits above.
 - Prefer 1–3 image layers per scene max. Use exact scene ids from the plan; prefer planned image layer ids when present.
 - fit: contain for devices, cover for full-bleed atmospheres.`;
+
+/**
+ * The images arm is told to emit "gen:" ids, which is right for plates it
+ * invents and wrong for something the user handed us. Without this it asked
+ * Flux to redraw an uploaded logo — the brain had already decided to show it,
+ * but the arm that assigns asset ids never heard about the upload.
+ */
+function referenceAssetNote(refs: ReferenceImage[] | undefined): string {
+  if (!refs || refs.length === 0) return "";
+  const ids = refs.map((r) => `"${r.id}" (${r.width}x${r.height})`).join(", ");
+  return (
+    ` The user uploaded reference images: ${ids}.` +
+    " To place one, use that exact assetId with NO imagePrompt. Do not generate a replacement for it."
+  );
+}
 
 function planContext(plan: DirectorPlan, aspectRatio: AspectRatio): string {
   const size = formatForAspect(aspectRatio);
@@ -233,6 +251,7 @@ async function callArm<T>(args: {
 
 /** Run structure / layout / copy / motion / images arms in parallel. */
 export async function runArmsParallel(opts: {
+  referenceImages?: ReferenceImage[];
   jobId: string;
   plan: DirectorPlan;
   aspectRatio: AspectRatio;
@@ -278,7 +297,8 @@ export async function runArmsParallel(opts: {
       system: IMAGES_SYSTEM,
       brief: opts.plan.briefs.images,
       extra:
-        "Mute plates only. If the brief needs a phone, emit gen:phone_frame with blank screen. Never bake chat text into the image.",
+        "Mute plates only. If the brief needs a phone, emit gen:phone_frame with blank screen. Never bake chat text into the image." +
+        referenceAssetNote(opts.referenceImages),
     }),
   ]);
 

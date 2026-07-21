@@ -1,8 +1,13 @@
-import type { AspectRatio } from "@/lib/motion/types";
+import type { AspectRatio, ReferenceImage } from "@/lib/motion/types";
 import { formatForAspect } from "@/lib/motion/validate";
 import { brainModel, callOpenAIJson, persistJson } from "@/lib/director/openai";
+import type { ChatMessage } from "@/lib/director/openai";
 import { catalogPromptBlock } from "@/components/motion/components/catalog";
 import { clampDurationSec } from "@/lib/motion/duration";
+import {
+  referenceImageBrief,
+  referenceImageParts,
+} from "@/lib/director/referenceImages";
 
 export type LayerRole =
   | "headline"
@@ -152,6 +157,7 @@ export async function runBrain(opts: {
   aspectRatio: AspectRatio;
   durationTargetSec: number;
   voiceoverEnabled: boolean;
+  referenceImages?: ReferenceImage[];
 }): Promise<DirectorPlan> {
   const size = formatForAspect(opts.aspectRatio);
   const model = brainModel();
@@ -172,10 +178,18 @@ export async function runBrain(opts: {
     `- Assign briefs for structure, layout, copy, motion, AND images (mute Flux plates — no text in images).`,
   ].join("\n");
 
+  // Reference images ride along with the brief in a single user turn, so the
+  // instructions about what to do with them sit next to the pixels themselves.
+  const refs = opts.referenceImages ?? [];
+  const imageParts = refs.length ? await referenceImageParts(refs) : [];
+  const userContent: ChatMessage["content"] = imageParts.length
+    ? [{ type: "text", text: `${user}\n${referenceImageBrief(refs)}` }, ...imageParts]
+    : user;
+
   const raw = await callOpenAIJson({
     model,
     system: BRAIN_SYSTEM,
-    messages: [{ role: "user", content: user }],
+    messages: [{ role: "user", content: userContent }],
     label: "brain",
   });
   await persistJson(opts.jobId, "brain-plan.json", raw);

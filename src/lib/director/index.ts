@@ -4,7 +4,7 @@ import {
   repairDirectorJson,
   validateMotionProject,
 } from "@/lib/motion/validate";
-import type { AspectRatio, MotionProject } from "@/lib/motion/types";
+import type { AspectRatio, MotionProject, ReferenceImage } from "@/lib/motion/types";
 import { createDtcpillFixture } from "@/lib/fixtures/dtcpill";
 import { runBrain } from "@/lib/director/brain";
 import { runBrainSolo } from "@/lib/director/brainSolo";
@@ -26,6 +26,8 @@ export type DirectorOptions = {
   voiceoverEnabled: boolean;
   /** Skip OpenAI entirely */
   localDemo?: boolean;
+  /** Images the user attached as visual reference. */
+  referenceImages?: ReferenceImage[];
   onLog?: (message: string) => void;
 };
 
@@ -177,6 +179,7 @@ export async function createMotionProject(opts: DirectorOptions): Promise<{
 
   log(opts, "Brain: analyzing intent + assigning briefs…");
   const plan = await runBrain({
+    referenceImages: opts.referenceImages,
     jobId: opts.jobId,
     prompt: opts.prompt,
     aspectRatio: opts.aspectRatio,
@@ -191,6 +194,7 @@ export async function createMotionProject(opts: DirectorOptions): Promise<{
   log(opts, "Arms: structure + layout + copy + motion (parallel)…");
   const armBundle = await runArmsParallel({
     jobId: opts.jobId,
+    referenceImages: opts.referenceImages,
     plan,
     aspectRatio: opts.aspectRatio,
     voiceoverEnabled: opts.voiceoverEnabled,
@@ -212,6 +216,10 @@ export async function createMotionProject(opts: DirectorOptions): Promise<{
     plan.title || titleFromPrompt(opts.prompt),
     arms,
   );
+  const snapped = snapReferenceAssetIds(project, opts.referenceImages);
+  if (snapped > 0) {
+    log(opts, `Riferimenti: ${snapped} layer ricondotti all'immagine caricata`);
+  }
   log(opts, `Multi-agent OK — validated (${attempts} pass(es))`);
   return {
     project,
@@ -221,6 +229,44 @@ export async function createMotionProject(opts: DirectorOptions): Promise<{
   };
 }
 
+
+
+/**
+ * Snap any assetId that merely *contains* an uploaded reference id back to the
+ * bare id.
+ *
+ * The images arm is told, hard and repeatedly, that ids look like
+ * "gen:<stable_id>". Told about references as well, it split the difference and
+ * emitted "gen:ref_abc123" — pointing at a Flux plate that will never exist
+ * while the user's own file sat unused. Prompt wording is the wrong tool for a
+ * rule that must hold every time, so it is enforced here instead.
+ */
+function snapReferenceAssetIds(
+  project: MotionProject,
+  refs: ReferenceImage[] | undefined,
+): number {
+  if (!refs || refs.length === 0) return 0;
+  let fixed = 0;
+  for (const scene of project.scenes) {
+    if (scene.background.type === "image") {
+      const hit = refs.find((r) => scene.background.type === "image" && scene.background.assetId.includes(r.id));
+      if (hit && scene.background.assetId !== hit.id) {
+        scene.background = { ...scene.background, assetId: hit.id };
+        fixed++;
+      }
+    }
+    for (const layer of scene.layers) {
+      if (layer.type !== "image") continue;
+      const hit = refs.find((r) => layer.assetId.includes(r.id));
+      if (!hit || layer.assetId === hit.id) continue;
+      layer.assetId = hit.id;
+      // A user-supplied image must never also carry a generation prompt.
+      delete layer.imagePrompt;
+      fixed++;
+    }
+  }
+  return fixed;
+}
 
 function fixtureVoiceScript(title: string, prompt?: string): string {
   const product = title.replace(/…$/, "").trim() || "this product";

@@ -344,6 +344,30 @@ export async function prepareProjectAssets(project: MotionProject): Promise<Proj
   for (const id of referenced) needed.add(id);
 
   const assets: ProjectAsset[] = [];
+
+  // Uploaded references already exist on disk under /public/uploads and are
+  // never generated, so they only need a manifest entry — without one they
+  // would be treated as a missing gen: plate and swapped for a placeholder.
+  for (const id of needed) {
+    if (!/^ref_[a-z0-9_]+$/i.test(id)) continue;
+    const file = path.join(process.cwd(), "public", "uploads", `${id}.png`);
+    let ok = true;
+    try {
+      await access(file);
+    } catch {
+      ok = false;
+    }
+    assets.push({
+      id,
+      type: "image",
+      source: "uploaded",
+      path: file,
+      mimeType: "image/png",
+      url: `/uploads/${id}.png`,
+      status: ok ? "ready" : "missing",
+    });
+  }
+
   const producedBuiltins = new Set<string>();
   for (const id of needed) {
     if (!id.startsWith("builtin:")) continue;

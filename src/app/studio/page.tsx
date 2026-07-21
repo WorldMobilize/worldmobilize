@@ -8,7 +8,15 @@ import { LayerInspector } from "@/components/editor/LayerInspector";
 import { ProjectTimeline } from "@/components/editor/ProjectTimeline";
 import { GenerationProgress } from "@/components/product/GenerationProgress";
 import { EmptyState } from "@/components/product/EmptyState";
-import type { AspectRatio, JobStatus, MotionJob, MotionLayer, MotionScene } from "@/lib/motion/types";
+import { ReferenceImages } from "@/components/product/ReferenceImages";
+import type {
+  AspectRatio,
+  JobStatus,
+  MotionJob,
+  MotionLayer,
+  MotionScene,
+  ReferenceImage,
+} from "@/lib/motion/types";
 
 const STATUS_LABEL: Record<JobStatus, string> = {
   queued: "In coda…",
@@ -46,6 +54,7 @@ export default function Home() {
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>("16:9");
   const [localDemo, setLocalDemo] = useState(false);
   const [voiceoverEnabled, setVoiceoverEnabled] = useState(false);
+  const [referenceImages, setReferenceImages] = useState<ReferenceImage[]>([]);
   const [job, setJob] = useState<MotionJob | null>(null);
   const [selectedSceneId, setSelectedSceneId] = useState<string | null>(null);
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
@@ -115,7 +124,13 @@ export default function Home() {
       const res = await fetch("/api/jobs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: brief, aspectRatio, localDemo, voiceoverEnabled }),
+        body: JSON.stringify({
+          prompt: brief,
+          aspectRatio,
+          localDemo,
+          voiceoverEnabled,
+          referenceImages,
+        }),
       });
       if (!res.ok) {
         const data = (await res.json().catch(() => null)) as { error?: string } | null;
@@ -223,6 +238,14 @@ export default function Home() {
           placeholder="Descrivi il video: scene, testi, dati, transizioni, camera…"
           className="w-full resize-y rounded-xl border border-zinc-700 bg-zinc-800 px-4 py-3 text-sm text-white outline-none placeholder:text-zinc-500 disabled:opacity-50"
         />
+        <div className="mt-3">
+          <ReferenceImages
+            images={referenceImages}
+            onChange={setReferenceImages}
+            disabled={submitting}
+          />
+        </div>
+
         <div className="mt-3 flex flex-wrap items-center gap-3">
           {(["16:9", "9:16", "1:1"] as AspectRatio[]).map((a) => (
             <button

@@ -1,7 +1,13 @@
 import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
-import type { JobProgress, JobStatus, MotionJob, MotionProject } from "@/lib/motion/types";
+import type {
+  JobProgress,
+  JobStatus,
+  MotionJob,
+  MotionProject,
+  ReferenceImage,
+} from "@/lib/motion/types";
 
 // Keeps the pre-rename filename on purpose: renaming it would orphan existing
 // job history, and the file is local-only so it carries none of the naming risk.
@@ -22,6 +28,7 @@ type JobRow = {
   voiceover_enabled: number;
   local_demo?: number;
   dirty_scenes_json?: string | null;
+  reference_images_json?: string | null;
   created_at: number;
   updated_at: number;
 };
@@ -47,6 +54,9 @@ function rowToJob(row: JobRow): MotionJob {
     voiceoverEnabled: !!row.voiceover_enabled,
     localDemo: !!row.local_demo,
     dirtySceneIds: row.dirty_scenes_json ? (JSON.parse(row.dirty_scenes_json) as string[]) : [],
+    referenceImages: row.reference_images_json
+      ? (JSON.parse(row.reference_images_json) as ReferenceImage[])
+      : [],
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -85,6 +95,11 @@ export function getDb(): Database.Database {
   } catch {
     // already exists
   }
+  try {
+    db.exec(`ALTER TABLE jobs ADD COLUMN reference_images_json TEXT`);
+  } catch {
+    // already exists
+  }
   dbSingleton = db;
   return db;
 }
@@ -100,6 +115,7 @@ export function insertJob(input: {
   durationTargetSec: number;
   voiceoverEnabled: boolean;
   localDemo?: boolean;
+  referenceImages?: ReferenceImage[];
 }): MotionJob {
   const db = getDb();
   const now = Date.now();
@@ -117,12 +133,13 @@ export function insertJob(input: {
     voiceoverEnabled: input.voiceoverEnabled,
     localDemo: !!input.localDemo,
     dirtySceneIds: [],
+    referenceImages: input.referenceImages ?? [],
     createdAt: now,
     updatedAt: now,
   };
   db.prepare(
-    `INSERT INTO jobs (id, status, prompt, project_json, progress_json, error, logs_json, output_path, aspect_ratio, duration_target, voiceover_enabled, local_demo, created_at, updated_at)
-     VALUES (@id, @status, @prompt, @project_json, @progress_json, @error, @logs_json, @output_path, @aspect_ratio, @duration_target, @voiceover_enabled, @local_demo, @created_at, @updated_at)`,
+    `INSERT INTO jobs (id, status, prompt, project_json, progress_json, error, logs_json, output_path, aspect_ratio, duration_target, voiceover_enabled, local_demo, reference_images_json, created_at, updated_at)
+     VALUES (@id, @status, @prompt, @project_json, @progress_json, @error, @logs_json, @output_path, @aspect_ratio, @duration_target, @voiceover_enabled, @local_demo, @reference_images_json, @created_at, @updated_at)`,
   ).run({
     id: job.id,
     status: job.status,
@@ -136,6 +153,7 @@ export function insertJob(input: {
     duration_target: job.durationTargetSec,
     voiceover_enabled: job.voiceoverEnabled ? 1 : 0,
     local_demo: job.localDemo ? 1 : 0,
+    reference_images_json: JSON.stringify(job.referenceImages),
     created_at: job.createdAt,
     updated_at: job.updatedAt,
   });

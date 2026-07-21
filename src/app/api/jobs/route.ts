@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createJobId, insertJob } from "@/lib/jobs/store";
 import { startJob } from "@/lib/jobs/worker";
 import { resolveDurationTargetSec } from "@/lib/motion/duration";
-import type { AspectRatio } from "@/lib/motion/types";
+import type { AspectRatio, ReferenceImage } from "@/lib/motion/types";
 
 export const runtime = "nodejs";
 
@@ -19,6 +19,7 @@ export async function POST(request: Request) {
     durationTargetSec?: number;
     voiceoverEnabled?: boolean;
     localDemo?: boolean;
+    referenceImages?: unknown;
   };
   try {
     body = (await request.json()) as typeof body;
@@ -47,6 +48,23 @@ export async function POST(request: Request) {
   });
   const voiceoverEnabled = body.voiceoverEnabled === true;
 
+  // Trust nothing from the body: rebuild each descriptor from known-good
+  // fields, and only accept ids that point inside our own uploads folder.
+  const referenceImages: ReferenceImage[] = Array.isArray(body.referenceImages)
+    ? body.referenceImages
+        .map((raw) => (raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null))
+        .filter((r): r is Record<string, unknown> => r != null)
+        .filter((r) => typeof r.id === "string" && /^ref_[a-z0-9_]+$/i.test(r.id))
+        .map((r) => ({
+          id: String(r.id),
+          url: `/uploads/${String(r.id)}.png`,
+          width: Number(r.width) || 0,
+          height: Number(r.height) || 0,
+          name: typeof r.name === "string" ? r.name.slice(0, 120) : undefined,
+        }))
+        .slice(0, 6)
+    : [];
+
   const id = createJobId();
   insertJob({
     id,
@@ -55,6 +73,7 @@ export async function POST(request: Request) {
     durationTargetSec,
     voiceoverEnabled,
     localDemo,
+    referenceImages,
   });
 
   startJob(id);

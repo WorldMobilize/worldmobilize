@@ -101,9 +101,11 @@ export async function runJob(jobId: string): Promise<void> {
       durationTargetSec: job.durationTargetSec,
       voiceoverEnabled: job.voiceoverEnabled,
       localDemo: job.localDemo,
+      referenceImages: job.referenceImages,
       onLog: (msg) => appendJobLog(jobId, msg),
     });
     const project: MotionProject = directed.project;
+
     if (directed.source === "fixture") {
       appendJobLog(jobId, `Fixture ready — "${project.title}"`);
     } else {

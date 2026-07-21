@@ -221,6 +221,23 @@ export type MotionJob = {
   localDemo: boolean;
   /** Scene ids edited since the last full export (for incremental re-render). */
   dirtySceneIds: string[];
+  /** Images the user handed the Director as visual reference. */
+  referenceImages: ReferenceImage[];
   createdAt: number;
   updatedAt: number;
+};
+
+/**
+ * An uploaded image the Director is shown before it plans.
+ *
+ * One upload serves both jobs a reference can have: the brain sees it, so it
+ * can take palette and mood from it, and it may also place it in a scene by
+ * this `id` — the asset manifest resolves it through the `url` below.
+ */
+export type ReferenceImage = {
+  id: string;
+  url: string;
+  width: number;
+  height: number;
+  name?: string;
 };
