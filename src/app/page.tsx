@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MotionPlayer, type MotionPlayerHandle } from "@/components/motion/MotionPlayer";
 import { LayerInspector } from "@/components/editor/LayerInspector";
 import { ProjectTimeline } from "@/components/editor/ProjectTimeline";
+import { GenerationProgress } from "@/components/product/GenerationProgress";
+import { EmptyState } from "@/components/product/EmptyState";
 import type { AspectRatio, JobStatus, MotionJob, MotionLayer, MotionScene } from "@/lib/motion/types";
 
 const STATUS_LABEL: Record<JobStatus, string> = {
@@ -212,8 +214,8 @@ export default function Home() {
       <header>
         <h1 className="text-xl font-semibold tracking-tight">Kinetta</h1>
         <p className="mt-1 text-sm text-zinc-400">
-          Un prompt → il Director crea un MotionProject che vedi, scrubbi e modifichi nel browser.
-          Player ed export finale sono identici.
+          Dal brief al video finito. Scrivi le scene, guarda l&apos;anteprima nel browser,
+          ritocca e riscarica.
         </p>
       </header>
 
@@ -246,11 +248,7 @@ export default function Home() {
               checked={voiceoverEnabled}
               onChange={(e) => setVoiceoverEnabled(e.target.checked)}
             />
-            Voce (ElevenLabs) — obbligatoria se vuoi audio nel MP4
-          </label>
-          <label className="flex items-center gap-2 text-xs text-zinc-400">
-            <input type="checkbox" checked={localDemo} onChange={(e) => setLocalDemo(e.target.checked)} />
-            Demo locale (fixture, no OpenAI)
+            Voce narrante
           </label>
           <button
             type="button"
@@ -261,9 +259,25 @@ export default function Home() {
             {submitting ? "Generazione…" : "Genera video"}
           </button>
         </div>
+        {/* Development affordance: renders the fixture project with no AI calls
+            and no paid providers. Deliberately not a peer of the real controls. */}
+        <label className="mt-3 flex items-center gap-2 text-[11px] text-zinc-600">
+          <input
+            type="checkbox"
+            checked={localDemo}
+            onChange={(e) => setLocalDemo(e.target.checked)}
+          />
+          Demo di prova, senza chiamate a pagamento
+        </label>
       </section>
 
       {error ? <p className="text-sm text-red-400">{error}</p> : null}
+
+      {/* Progress outranks everything while the video does not exist yet, and
+          stays as a slim bar once the editor takes over the screen. */}
+      {job && job.status !== "ready" ? (
+        <GenerationProgress job={job} nowMs={nowTick} compact={!!project} />
+      ) : null}
 
       {project ? (
         <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
@@ -498,17 +512,20 @@ export default function Home() {
             </section>
           </div>
         </div>
-      ) : (
-        <section className="flex aspect-video items-center justify-center rounded-2xl border border-zinc-800 bg-zinc-900 text-sm text-zinc-500">
-          {submitting ? STATUS_LABEL[job?.status ?? "queued"] : "Genera un video per iniziare"}
-        </section>
+      ) : job ? null : (
+        <EmptyState
+          onPick={(ex) => {
+            setPrompt(ex.prompt);
+            setAspectRatio(ex.hint.includes("9:16") ? "9:16" : "16:9");
+          }}
+        />
       )}
 
       {job ? (
         <section className="rounded-2xl border border-zinc-800 bg-zinc-950 p-3">
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-sm font-medium text-zinc-200">
-              Log pipeline · {STATUS_LABEL[job.status] ?? job.status}
+              Dettagli tecnici · {STATUS_LABEL[job.status] ?? job.status}
             </h2>
             <span className="text-[11px] text-zinc-500">
               {job.status !== "ready" && job.status !== "failed"
